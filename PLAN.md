@@ -83,6 +83,11 @@ First slice, built and tested:
   size, kind, signature over the body as received, then the body's rules (NPT on
   one side, canonical positive amounts, expiry, user HTLC timeout at least
   `MIN_TIMEOUT_GAP_SECS` after the solver's, SHA-256 hash lock). 15 tests.
+- `crates/swap-guard`: swap step 4, the NPT receiver's check of the giver's lock before it
+  locks its own asset: lock script = the agreed `Htlc`, exactly one NativeCurrency coin of the
+  agreed amount (no TimeLock, nothing else), the notification opens the addition record, the
+  record is a transaction output of a caller-supplied block at least `min_depth` deep. Pure
+  (no chain I/O), neptune-core's own types and `commit`. 8 tests.
 - `crates/neptune-provider`: provider-stdio/v1 binary for `elastos://neptune/*`.
   Ops `init`, `networks`, `status` (node height via `chain_height`), `shutdown`.
   Node address must be a loopback IP literal (no DNS); replies never contain it.

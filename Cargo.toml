@@ -8,6 +8,7 @@ members = [
     "crates/neptune-provider",
     "crates/intents-ui",
     "crates/htlc",
+    "crates/swap-guard",
 ]
 exclude = ["vendor"]
 

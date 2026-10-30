@@ -1,0 +1,17 @@
+[package]
+name = "swap-guard"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "The NPT receiver's check of the NPT giver's HTLC lock, before it locks its own asset"
+
+[dependencies]
+htlc = { path = "../htlc" }
+neptune-consensus.workspace = true
+neptune-mutator-set.workspace = true
+neptune-wallet.workspace = true
+thiserror = "2"
+
+[dev-dependencies]
+neptune-primitives.workspace = true
+tasm-lib = "9.0.0"
