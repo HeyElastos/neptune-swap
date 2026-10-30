@@ -1,0 +1,29 @@
+[package]
+name = "light-core"
+description = "Neptune light wallet core: keys, block scanning, balance. No I/O."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+neptune-consensus.workspace = true
+neptune-mutator-set.workspace = true
+neptune-primitives.workspace = true
+neptune-wallet.workspace = true
+neptune-rpc-api.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tasm-lib = "9.0.0"
+rand = "0.10"
+
+# Browser entropy for the two getrandom majors in the tree (k256/aes-gcm via
+# rand_core 0.6, and rand 0.10). Only the wasm32 build needs these switches.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+
+[dev-dependencies]
+# Fake blocks for the scanner tests (neptune_wallet::mock_block's pattern).
+neptune-wallet = { workspace = true, features = ["test-helpers"] }
+neptune-consensus = { workspace = true, features = ["test-helpers"] }

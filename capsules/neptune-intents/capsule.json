@@ -1,0 +1,45 @@
+{
+  "schema": "elastos.capsule/v1",
+  "name": "neptune-intents",
+  "version": "0.1.0",
+  "description": "Swap NPT privately: say what you want, solvers compete, settle on Neptune",
+  "author": "local-development",
+  "role": "app",
+  "type": "web-projection",
+  "runtime_abi": "elastos.runtime-projection/v1",
+  "bus_contract": "elastos.runtime-projection/v1",
+  "execution": "web-projection",
+  "projections": ["web", "facts", "affordances", "gates"],
+  "entrypoint": "browser/index.html",
+  "interfaces": [
+    {
+      "id": "neptune.intents",
+      "version": "0.1.0",
+      "description": "Compose private swap intents and check the Neptune node",
+      "methods": [
+        {
+          "id": "networks.view",
+          "description": "List the Neptune networks this Home can use",
+          "risk": "read",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/meta/networks",
+          "operation": "networks"
+        },
+        {
+          "id": "status.view",
+          "description": "Show the local Neptune node's chain height",
+          "risk": "read",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/*",
+          "operation": "status"
+        }
+      ]
+    }
+  ],
+  "resources": {
+    "memory_mb": 16,
+    "gpu": false
+  }
+}

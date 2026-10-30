@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Neptune Intents</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #070c1c; overflow: hidden; }
+  @media (prefers-color-scheme: light) { html, body { background: #dce6f4; } }
+  /* Slint's winit backend draws into this canvas; it fills the page. */
+  #canvas { display: block; width: 100vw !important; height: 100vh !important; outline: none; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="0"></canvas>
+<script type="module">
+  // The whole app is Rust and Slint (crates/intents-ui); this only starts the wasm.
+  import init from './pkg/intents-ui.js';
+  try {
+    await init({ module_or_path: './pkg/intents-ui_bg.wasm' });
+  } catch (e) {
+    // Slint's event loop never returns: it leaves by a JS exception, by design.
+    if (!String(e).includes('Using exceptions for control flow')) throw e;
+  }
+</script>
+</body>
+</html>

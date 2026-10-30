@@ -1,0 +1,628 @@
+// Neptune Intents. Hyper's tiers: the node is glanced at (a chip and its popover), the swap is
+// the main area, the review is a sheet. Everything floats as frosted glass over the wallpaper.
+
+import { Skin, Look, Sp, Rad, Ty, Ctl, Motion } from "tokens.slint";
+import { Frost, Wallpaper, Glass } from "glass.slint";
+
+export { Frost, Look }
+
+export struct AssetView {
+    letter: string,
+    symbol: string,
+    network: string,
+    npt: bool,
+    // False while the asset cannot be swapped without a bridge: listed, not selectable.
+    offered: bool,
+}
+
+component Face inherits Rectangle {
+    in property <AssetView> asset;
+    width: 26px;
+    height: 26px;
+    border-radius: 13px;
+    background: root.asset.npt ? Skin.accent : Skin.surface3;
+    Text {
+        text: root.asset.letter;
+        color: root.asset.npt ? Skin.on-accent : Skin.ink;
+        font-size: Ty.caption;
+        font-weight: Ty.bold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component Chevron inherits Path {
+    width: 10px;
+    height: 6px;
+    viewbox-width: 10;
+    viewbox-height: 6;
+    commands: "M 1 1 L 5 5 L 9 1";
+    stroke: Skin.muted;
+    stroke-width: 1.5px;
+    fill: transparent;
+}
+
+// A surface that answers the pointer: a clear rest lifts to the hover tint, a solid one steps
+// toward the ink (Hyper ui::hoverable).
+component Pressable inherits Rectangle {
+    callback clicked;
+    in property <color> rest: transparent;
+    in property <color> hover-fill: Skin.hover;
+    in property <bool> enabled: true;
+    background: !root.enabled ? root.rest : touch.pressed ? root.hover-fill.mix(Skin.ink, 0.92) : touch.has-hover ? root.hover-fill : root.rest;
+    animate background { duration: Motion.hover; }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}
+
+// HyButton: a primary is gold with its glow, a ghost one tone step above the glass.
+component Button inherits Pressable {
+    in property <string> text;
+    in property <bool> primary: true;
+    height: Ctl.m;
+    min-width: label.preferred-width + 2 * Sp.l;
+    border-radius: Rad.ctrl;
+    opacity: root.enabled ? 1 : 0.4;
+    rest: root.primary ? Skin.accent : Skin.ink.with-alpha(0.10);
+    hover-fill: root.primary ? Skin.accent.mix(#FFFFFF, 0.92) : Skin.ink.with-alpha(0.16);
+    drop-shadow-offset-y: root.primary && root.enabled ? 2px : 0px;
+    drop-shadow-blur: root.primary && root.enabled ? 8px : 0px;
+    drop-shadow-color: Skin.accent.with-alpha(0.25);
+    label := Text {
+        text: root.text;
+        color: root.primary ? Skin.on-accent : Skin.ink;
+        font-size: Ty.body;
+        font-weight: root.primary ? Ty.strong : Ty.label;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// HySegmented: a track at the ink's 8 %, the chosen pill a tone up.
+component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected;
+    height: 32px;
+    border-radius: Rad.ctrl;
+    background: Skin.track;
+    HorizontalLayout {
+        padding: 2px;
+        for option[i] in root.options: Pressable {
+            border-radius: 10px;
+            rest: i == root.selected ? Skin.surface3 : transparent;
+            hover-fill: i == root.selected ? Skin.surface3 : Skin.hover;
+            min-width: text.preferred-width + 2 * Sp.m;
+            clicked => { root.selected = i; }
+            text := Text {
+                text: option;
+                font-size: Ty.small;
+                font-weight: Ty.label;
+                color: i == root.selected ? Skin.ink : Skin.muted;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// One leg of the swap: a quiet well with the typed amount and the asset chip.
+component Leg inherits Rectangle {
+    in property <string> label;
+    in property <AssetView> asset;
+    in-out property <string> amount;
+    // The chip's bottom right corner, for its popover.
+    callback pick-asset(length, length);
+    border-radius: Rad.ctrl;
+    background: Skin.on-glass;
+    border-width: input.has-focus ? 2px : 0px;
+    border-color: Skin.accent;
+    height: column.preferred-height;
+    column := VerticalLayout {
+        padding-top: Sp.m;
+        padding-bottom: Sp.m;
+        padding-left: Sp.l;
+        padding-right: Sp.m;
+        spacing: Sp.xs;
+        Text {
+            text: root.label;
+            color: Skin.muted;
+            font-size: Ty.caption;
+        }
+        HorizontalLayout {
+            spacing: Sp.m;
+            Rectangle {
+                horizontal-stretch: 1;
+                height: Ctl.m;
+                input := TextInput {
+                    text <=> root.amount;
+                    color: Skin.ink;
+                    font-size: Ty.display;
+                    font-weight: Ty.strong;
+                    vertical-alignment: center;
+                    single-line: true;
+                    input-type: decimal;
+                    selection-background-color: Skin.accent.with-alpha(0.35);
+                }
+                if root.amount == "": Text {
+                    text: "0";
+                    color: Skin.faint;
+                    font-size: Ty.display;
+                    font-weight: Ty.strong;
+                    vertical-alignment: center;
+                    horizontal-alignment: left;
+                }
+            }
+            chip := Pressable {
+                height: Ctl.m;
+                border-radius: Rad.pill;
+                rest: Skin.ink.with-alpha(0.08);
+                hover-fill: Skin.ink.with-alpha(0.14);
+                width: chip-row.preferred-width;
+                clicked => { root.pick-asset(self.absolute-position.x + self.width, self.absolute-position.y + self.height); }
+                chip-row := HorizontalLayout {
+                    padding-left: Sp.s;
+                    padding-right: Sp.m;
+                    spacing: Sp.s;
+                    VerticalLayout { alignment: center; Face { asset: root.asset; } }
+                    Text {
+                        text: root.asset.symbol;
+                        color: Skin.ink;
+                        font-size: Ty.body;
+                        font-weight: Ty.strong;
+                        vertical-alignment: center;
+                    }
+                    VerticalLayout { alignment: center; Chevron { } }
+                }
+            }
+        }
+    }
+}
+
+// A row in a popover list.
+component Row inherits Pressable {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> chosen;
+    in property <AssetView> asset;
+    in property <bool> with-face;
+    height: root.subtitle == "" ? Ctl.m : 52px;
+    border-radius: Rad.ctrl;
+    HorizontalLayout {
+        padding-left: Sp.m;
+        padding-right: Sp.m;
+        spacing: Sp.m;
+        if root.with-face: VerticalLayout { alignment: center; Face { asset: root.asset; } }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text { text: root.title; color: Skin.ink; font-size: Ty.body; }
+            if root.subtitle != "": Text { text: root.subtitle; color: Skin.muted; font-size: Ty.caption; }
+        }
+        Text {
+            text: "✓";
+            visible: root.chosen;
+            color: Skin.accent-text;
+            font-size: Ty.body;
+            font-weight: Ty.strong;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// A popover: anchored, sized to its content, fading in from 0.4 as it rises 10 px.
+component Popover inherits Glass {
+    in property <bool> open;
+    in property <length> anchor-y;
+    opacity: root.open ? 1 : 0;
+    visible: self.opacity > 0.01;
+    y: root.anchor-y + (root.open ? 0px : Motion.overlay-rise);
+    animate opacity, y {
+        duration: root.open ? Motion.overlay-in : Motion.overlay-out;
+        easing: Motion.ease;
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Neptune Intents";
+    preferred-width: 520px;
+    preferred-height: 760px;
+    min-width: 320px;
+    min-height: 520px;
+    background: Skin.base;
+    default-font-size: Ty.body;
+
+    in property <[AssetView]> assets;
+    in-out property <int> give-index: 1;
+    in-out property <int> want-index: 0;
+    in-out property <string> give-amount;
+    in-out property <string> want-amount;
+    in-out property <int> ttl-index: 1;
+    in property <string> form-error;
+
+    // The node: "idle", "ok", "warn" or "error".
+    in property <string> node-state: "idle";
+    in property <string> node-label: "Node";
+    in property <string> node-detail;
+    in property <[string]> networks;
+    in property <int> network-index;
+
+    // The review sheet.
+    in-out property <bool> review-open;
+    in property <string> sum-give;
+    in property <string> sum-want;
+    in property <string> sum-until;
+    in property <string> review-json;
+    property <bool> show-json;
+
+    // Which popover is open: "", "node", "give" or "want".
+    in-out property <string> popover;
+    property <length> pop-right;
+    property <length> pop-top;
+
+    callback review();
+    callback pick-network(int);
+    callback refresh();
+
+    init => {
+        Frost.width = self.width;
+        Frost.height = self.height;
+    }
+    changed width => { Frost.width = self.width; }
+    changed height => { Frost.height = self.height; }
+
+    function pick-asset(side: string, index: int) {
+        if side == "give" {
+            if index == root.want-index { root.want-index = root.give-index; }
+            root.give-index = index;
+        } else {
+            if index == root.give-index { root.give-index = root.want-index; }
+            root.want-index = index;
+        }
+        root.popover = "";
+    }
+
+    function flip() {
+        let index = root.give-index;
+        root.give-index = root.want-index;
+        root.want-index = index;
+        let amount = root.give-amount;
+        root.give-amount = root.want-amount;
+        root.want-amount = amount;
+    }
+
+    // Development screenshots: open a popover as if its trigger was clicked.
+    public function demo-open(name: string) {
+        if name == "node" {
+            root.open-popover(name, node-chip.absolute-position.x + node-chip.width, node-chip.absolute-position.y + node-chip.height);
+        } else if name == "give" {
+            root.open-popover(name, give-leg.absolute-position.x + give-leg.width - Sp.m, give-leg.absolute-position.y + give-leg.height - Sp.m);
+        } else {
+            root.open-popover(name, want-leg.absolute-position.x + want-leg.width - Sp.m, want-leg.absolute-position.y + want-leg.height - Sp.m);
+        }
+    }
+
+    function open-popover(name: string, right: length, bottom: length) {
+        if root.popover == name {
+            root.popover = "";
+        } else {
+            root.pop-right = right;
+            root.pop-top = bottom + Sp.s;
+            root.popover = name;
+        }
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                if root.popover != "" { root.popover = ""; return accept; }
+                if root.review-open { root.review-open = false; return accept; }
+            }
+            reject
+        }
+
+        Wallpaper { }
+
+        VerticalLayout {
+            // The bar: the app's name and the node, glanced at.
+            HorizontalLayout {
+                height: 52px;
+                padding-left: Sp.l;
+                padding-right: Sp.l;
+                spacing: Sp.m;
+                Text {
+                    text: "Neptune Intents";
+                    color: Skin.ink;
+                    font-size: Ty.title;
+                    font-weight: Ty.strong;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout {
+                    alignment: center;
+                    node-chip := Glass {
+                        radius: Rad.pill;
+                        floating: false;
+                        height: Ctl.s;
+                        width: node-text.preferred-width + 2 * Sp.m + 8px + Sp.s;
+                        HorizontalLayout {
+                            padding-left: Sp.m;
+                            padding-right: Sp.m;
+                            spacing: Sp.s;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 8px;
+                                    height: 8px;
+                                    border-radius: 4px;
+                                    background: root.node-state == "ok" ? Skin.good : root.node-state == "warn" ? Skin.connecting : root.node-state == "error" ? Skin.danger : Skin.faint;
+                                }
+                            }
+                            node-text := Text {
+                                text: root.node-label;
+                                color: Skin.ink;
+                                font-size: Ty.small;
+                                font-weight: Ty.label;
+                                vertical-alignment: center;
+                            }
+                        }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.open-popover("node", node-chip.absolute-position.x + node-chip.width, node-chip.absolute-position.y + node-chip.height); }
+                        }
+                    }
+                }
+            }
+
+            // The lane (Hyper Lay.card-max 560). It keeps its own height; the spacer below takes the rest.
+            HorizontalLayout {
+                alignment: center;
+                vertical-stretch: 0;
+                padding-left: Sp.l;
+                padding-right: Sp.l;
+                lane := VerticalLayout {
+                    preferred-width: 560px;
+                    max-width: 560px;
+                    padding-top: Sp.s;
+                    spacing: Sp.l;
+                    Text {
+                        text: "Say what you want. Solvers compete in private, and the Neptune leg settles where nobody can see it.";
+                        color: Skin.ink;
+                        font-size: Ty.small;
+                        wrap: word-wrap;
+                    }
+                    Glass {
+                        height: card.preferred-height;
+                        card := VerticalLayout {
+                            padding: Sp.l;
+                            spacing: Sp.m;
+                            give-leg := Leg {
+                                label: "You give";
+                                asset: root.assets[root.give-index];
+                                amount <=> root.give-amount;
+                                pick-asset(right, bottom) => { root.open-popover("give", right, bottom); }
+                            }
+                            HorizontalLayout {
+                                alignment: center;
+                                height: Ctl.m - 2 * Sp.m;
+                                flip-button := Pressable {
+                                    width: Ctl.m;
+                                    height: Ctl.m;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: Ctl.m / 2;
+                                    rest: Skin.sheet.with-alpha(0.9);
+                                    hover-fill: Skin.surface3;
+                                    drop-shadow-blur: 8px;
+                                    drop-shadow-color: Skin.shadow;
+                                    clicked => { root.flip(); }
+                                    Path {
+                                        width: 16px;
+                                        height: 16px;
+                                        viewbox-width: 16;
+                                        viewbox-height: 16;
+                                        commands: "M 5 2 L 5 13 M 2 10 L 5 13 L 8 10 M 11 14 L 11 3 M 8 6 L 11 3 L 14 6";
+                                        stroke: Skin.ink;
+                                        stroke-width: 1.6px;
+                                        fill: transparent;
+                                    }
+                                }
+                            }
+                            want-leg := Leg {
+                                label: "You want at least";
+                                asset: root.assets[root.want-index];
+                                amount <=> root.want-amount;
+                                pick-asset(right, bottom) => { root.open-popover("want", right, bottom); }
+                            }
+                            HorizontalLayout {
+                                spacing: Sp.m;
+                                padding-top: Sp.xs;
+                                Text {
+                                    text: "Solvers can answer for";
+                                    color: Skin.muted;
+                                    font-size: Ty.small;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    wrap: word-wrap;
+                                }
+                                Segmented {
+                                    options: ["5 min", "10 min", "30 min"];
+                                    selected <=> root.ttl-index;
+                                }
+                            }
+                            if root.form-error != "": Text {
+                                text: root.form-error;
+                                color: Skin.danger;
+                                font-size: Ty.small;
+                                wrap: word-wrap;
+                            }
+                            Button {
+                                text: "Review intent";
+                                clicked => { root.review(); }
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+
+        // A click outside an open popover closes it.
+        if root.popover != "": TouchArea {
+            clicked => { root.popover = ""; }
+        }
+
+        Popover {
+            open: root.popover == "node";
+            anchor-y: root.pop-top;
+            width: 280px;
+            x: max(Sp.s, root.pop-right - self.width);
+            height: node-list.preferred-height;
+            node-list := VerticalLayout {
+                padding: 6px;
+                Text {
+                    text: "Neptune node";
+                    color: Skin.muted;
+                    font-size: Ty.caption;
+                    height: 28px;
+                    vertical-alignment: center;
+                    x: Sp.m;
+                }
+                if root.node-detail != "": Text {
+                    text: root.node-detail;
+                    color: Skin.ink;
+                    font-size: Ty.small;
+                    wrap: word-wrap;
+                    x: Sp.m;
+                    width: parent.width - 2 * Sp.m;
+                }
+                for network[i] in root.networks: Row {
+                    title: network;
+                    chosen: i == root.network-index;
+                    clicked => { root.popover = ""; root.pick-network(i); }
+                }
+                if root.networks.length > 0: Row {
+                    title: "Check again";
+                    clicked => { root.popover = ""; root.refresh(); }
+                }
+            }
+        }
+
+        Popover {
+            open: root.popover == "give" || root.popover == "want";
+            anchor-y: root.pop-top;
+            width: 240px;
+            x: max(Sp.s, root.pop-right - self.width);
+            height: asset-list.preferred-height;
+            asset-list := VerticalLayout {
+                padding: 6px;
+                Text {
+                    text: root.popover == "want" ? "You want" : "You give";
+                    color: Skin.muted;
+                    font-size: Ty.caption;
+                    height: 28px;
+                    vertical-alignment: center;
+                    x: Sp.m;
+                }
+                for asset[i] in root.assets: Row {
+                    title: asset.symbol;
+                    subtitle: asset.network;
+                    asset: asset;
+                    with-face: true;
+                    enabled: asset.offered;
+                    opacity: asset.offered ? 1 : 0.45;
+                    chosen: i == (root.popover == "want" ? root.want-index : root.give-index);
+                    clicked => { root.pick-asset(root.popover, i); }
+                }
+            }
+        }
+
+        // The review: a sheet over the dimmed app, sized to its content.
+        Rectangle {
+            background: Skin.scrim;
+            opacity: root.review-open ? 1 : 0;
+            visible: self.opacity > 0.01;
+            animate opacity { duration: Motion.overlay-in; easing: Motion.ease; }
+            TouchArea { clicked => { root.review-open = false; } }
+        }
+        Glass {
+            property <bool> narrow: root.width < 480px;
+            // A reading surface: the tint denser than chrome (Hyper frost-dense, 94 %).
+            tint: 0.94;
+            width: self.narrow ? root.width : min(440px, root.width - 2 * Sp.l);
+            height: sheet.preferred-height;
+            x: (root.width - self.width) / 2;
+            y: (self.narrow ? root.height - self.height : (root.height - self.height) / 2) + (root.review-open ? 0px : Motion.overlay-rise);
+            opacity: root.review-open ? 1 : 0;
+            visible: self.opacity > 0.01;
+            animate opacity, y { duration: Motion.overlay-in; easing: Motion.ease; }
+            sheet := VerticalLayout {
+                padding: Sp.xl;
+                spacing: Sp.m;
+                Text {
+                    text: "Review intent";
+                    color: Skin.ink;
+                    font-size: Ty.display;
+                    font-weight: Ty.strong;
+                }
+                for item in [
+                    { label: "You give", value: root.sum-give },
+                    { label: "You want at least", value: root.sum-want },
+                    { label: "Solvers can answer for", value: root.sum-until },
+                ]: Rectangle {
+                    border-radius: Rad.ctrl;
+                    background: Skin.on-glass;
+                    height: well.preferred-height;
+                    well := VerticalLayout {
+                        padding-top: Sp.m;
+                        padding-bottom: Sp.m;
+                        padding-left: Sp.l;
+                        padding-right: Sp.l;
+                        Text { text: item.label; color: Skin.muted; font-size: Ty.caption; }
+                        Text { text: item.value; color: Skin.ink; font-size: Ty.body; font-weight: Ty.strong; wrap: word-wrap; }
+                    }
+                }
+                Text {
+                    text: "Next: a one-time DID signs it, and it goes sealed to a few solvers. Nobody else sees it.";
+                    color: Skin.muted;
+                    font-size: Ty.small;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: (root.show-json ? "▾ " : "▸ ") + "Message as signed";
+                    color: Skin.accent-text;
+                    font-size: Ty.small;
+                    TouchArea { mouse-cursor: pointer; clicked => { root.show-json = !root.show-json; } }
+                }
+                if root.show-json: Rectangle {
+                    border-radius: Rad.ctrl;
+                    background: Skin.on-glass;
+                    height: json.preferred-height + 2 * Sp.m;
+                    json := Text {
+                        x: Sp.m;
+                        width: parent.width - 2 * Sp.m;
+                        text: root.review-json;
+                        color: Skin.muted;
+                        font-size: 12px;
+                        wrap: char-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Sp.s;
+                    padding-top: Sp.xs;
+                    Button {
+                        text: "Edit";
+                        primary: false;
+                        clicked => { root.review-open = false; }
+                    }
+                    Button {
+                        text: "Send to solvers";
+                        enabled: false;
+                    }
+                }
+            }
+        }
+    }
+}

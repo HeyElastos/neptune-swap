@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/light-core",
+    "crates/light-wasm",
+    "crates/light-cli",
+    "crates/intents-protocol",
+    "crates/neptune-provider",
+    "crates/intents-ui",
+    "crates/htlc",
+]
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# neptune-core v0.19.3 (259881b), vendored by scripts/vendor-neptune.sh with
+# patches/neptune-core-wasm32.patch applied.
+[workspace.dependencies]
+neptune-consensus = { path = "vendor/neptune-core/neptune-consensus" }
+neptune-mutator-set = { path = "vendor/neptune-core/neptune-mutator-set" }
+neptune-primitives = { path = "vendor/neptune-core/neptune-primitives" }
+neptune-wallet = { path = "vendor/neptune-core/neptune-wallet" }
+neptune-rpc-api = { path = "vendor/neptune-core/neptune-rpc/api" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+
+# Dependencies carry no debug info: smaller build dirs at no speed cost
+# (measured on the Hyper Slint workspace, 2026-10-30).
+[profile.dev.package."*"]
+debug = false
+# Triton VM proves and runs orders of magnitude faster optimised, even in tests.
+opt-level = 3
+
+# Tip5 hashing dominates scanning; keep it fast in debug builds too.
+[profile.dev.package.twenty-first]
+opt-level = 3
+[profile.dev.package.tasm-lib]
+opt-level = 3

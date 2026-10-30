@@ -1,0 +1,130 @@
+diff --git a/neptune-consensus/Cargo.toml b/neptune-consensus/Cargo.toml
+index fcf79dd..ca9e93d 100644
+--- a/neptune-consensus/Cargo.toml
++++ b/neptune-consensus/Cargo.toml
+@@ -67,6 +67,15 @@ serde_json = "1.0"
+ strum = { version = "0.27.0", features = ["derive"] }
+ tasm-lib = "9.0.0"
+ thiserror = "1.0.65"
++tracing = "0.1"
++
++neptune-job-queue = { version = "0.19.3", path = "../neptune-job-queue" }
++neptune-mutator-set = { version = "0.19.3", path = "../neptune-mutator-set" }
++neptune-primitives = { version = "0.19.3", path = "../neptune-primitives" }
++
++# wasm32 (light wallet patch): tokio supports only sync, macros, io-util, rt
++# and time there, so process and rt-multi-thread are native-only.
++[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ tokio = { version = "1.47", features = [
+     "io-util",
+     "macros",
+@@ -76,11 +85,9 @@ tokio = { version = "1.47", features = [
+     "sync",
+     "time",
+ ] }
+-tracing = "0.1"
+ 
+-neptune-job-queue = { version = "0.19.3", path = "../neptune-job-queue" }
+-neptune-mutator-set = { version = "0.19.3", path = "../neptune-mutator-set" }
+-neptune-primitives = { version = "0.19.3", path = "../neptune-primitives" }
++[target.'cfg(target_arch = "wasm32")'.dependencies]
++tokio = { version = "1.47", features = ["io-util", "macros", "rt", "sync", "time"] }
+ 
+ [dev-dependencies]
+ # Unit tests in this crate need the optional arbitrary/proptest impls and the
+diff --git a/neptune-consensus/src/proof_abstractions/tasm/prover_job.rs b/neptune-consensus/src/proof_abstractions/tasm/prover_job.rs
+index 6051df9..0ebff21 100644
+--- a/neptune-consensus/src/proof_abstractions/tasm/prover_job.rs
++++ b/neptune-consensus/src/proof_abstractions/tasm/prover_job.rs
+@@ -78,6 +78,11 @@ pub enum VmProcessError {
+     #[error("stdin unavailable")]
+     StdinUnavailable,
+ 
++    /// wasm32 (light wallet patch): a browser cannot start the
++    /// `neptune-prover` child process, and this build has no in-process prover.
++    #[error("proving is not available in this build")]
++    ProverUnavailable,
++
+     #[error("result deserialization failed")]
+     ResultDeserializationFailed(#[from] Box<bincode::ErrorKind>),
+ 
+@@ -374,6 +379,15 @@ impl ProverJob {
+     ///
+     /// The process result is only read if exit code is 0.
+     /// A non-zero exit code or no code results in an error.
++    #[cfg(target_arch = "wasm32")]
++    pub async fn prove_out_of_process(
++        &self,
++        _rx: JobCancelReceiver,
++    ) -> Result<ProverProcessCompletion, VmProcessError> {
++        Err(VmProcessError::ProverUnavailable)
++    }
++
++    #[cfg(not(target_arch = "wasm32"))]
+     pub async fn prove_out_of_process(
+         &self,
+         mut rx: JobCancelReceiver,
+@@ -592,6 +606,7 @@ impl Job for ProverJob {
+ }
+ 
+ // future cleanup: remove this module, when possible.
++#[cfg(not(target_arch = "wasm32"))]
+ mod process_util {
+ 
+     use std::process::Output;
+diff --git a/neptune-consensus/src/proof_abstractions/triton_vm_job_queue.rs b/neptune-consensus/src/proof_abstractions/triton_vm_job_queue.rs
+index e33f6df..119bd85 100644
+--- a/neptune-consensus/src/proof_abstractions/triton_vm_job_queue.rs
++++ b/neptune-consensus/src/proof_abstractions/triton_vm_job_queue.rs
+@@ -82,7 +82,14 @@ fn worker_runtime() -> &'static tokio::runtime::Runtime {
+     use std::sync::OnceLock;
+     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+     RUNTIME.get_or_init(|| {
+-        tokio::runtime::Builder::new_multi_thread()
++        // wasm32 (light wallet patch): no threads, so the queue gets a
++        // current-thread runtime. Nothing drives it there; light wallets
++        // never queue Triton VM jobs.
++        #[cfg(target_arch = "wasm32")]
++        let mut builder = tokio::runtime::Builder::new_current_thread();
++        #[cfg(not(target_arch = "wasm32"))]
++        let mut builder = tokio::runtime::Builder::new_multi_thread();
++        builder
+             .enable_all()
+             .thread_name("triton-vm-job-queue")
+             .build()
+diff --git a/neptune-primitives/Cargo.toml b/neptune-primitives/Cargo.toml
+index d22e8fa..e488e2a 100644
+--- a/neptune-primitives/Cargo.toml
++++ b/neptune-primitives/Cargo.toml
+@@ -35,7 +35,6 @@ serde = { version = "1.0", features = ["derive"] }
+ strum = { version = "0.27.0", features = ["derive"] }
+ tasm-lib = "9.0.0"
+ thiserror = "1.0.65"
+-tokio = { version = "1.47", features = ["fs"] }
+ 
+ # optional: required for unit tests and the arbitrary-impls feature.
+ # duplicated (non-optional) in [dev-dependencies] for this crate's own tests.
+@@ -43,6 +42,10 @@ arbitrary = { version = "1.4.1", features = ["derive"], optional = true }
+ proptest = { version = "1.7", optional = true }
+ proptest-arbitrary-interop = { version = "0.1", optional = true }
+ 
++# wasm32 (light wallet patch): tokio has no fs there; DataDirectory is native-only.
++[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
++tokio = { version = "1.47", features = ["fs"] }
++
+ [dev-dependencies]
+ arbitrary = { version = "1.4.1", features = ["derive"] }
+ num-rational = "0.4"
+diff --git a/neptune-primitives/src/lib.rs b/neptune-primitives/src/lib.rs
+index b09f00f..7376bb8 100644
+--- a/neptune-primitives/src/lib.rs
++++ b/neptune-primitives/src/lib.rs
+@@ -12,6 +12,8 @@ pub use tasm_lib::prelude::twenty_first;
+ pub mod announcement_flag;
+ pub mod block_height;
+ pub mod block_selector;
++// wasm32 (light wallet patch): files need tokio::fs, which wasm32 lacks.
++#[cfg(not(target_arch = "wasm32"))]
+ pub mod data_directory;
+ pub mod difficulty_control;
+ pub mod mast_hash;

@@ -1,0 +1,56 @@
+{
+  "schema": "elastos.capsule/v1",
+  "name": "neptune-provider",
+  "version": "0.1.0",
+  "description": "Typed Neptune Cash reads over a local, outbound-only node",
+  "author": "local-development",
+  "role": "provider",
+  "type": "native-provider",
+  "runtime_abi": "elastos.provider-stdio/v1",
+  "execution": "native-provider",
+  "entrypoint": "neptune-provider",
+  "provides": "elastos://neptune/*",
+  "authority": {
+    "reason": "Owns the loopback JSON-RPC address of a local neptune-core node and answers typed reads, so app capsules never receive a node address.",
+    "capabilities": [
+      {
+        "resource": "elastos://neptune/*",
+        "actions": ["read"],
+        "operations": ["networks", "status"]
+      }
+    ],
+    "audit_events": ["neptune.networks", "neptune.status"]
+  },
+  "interfaces": [
+    {
+      "id": "elastos.provider.neptune",
+      "version": "0.1.0",
+      "description": "Neptune Cash network discovery and node status",
+      "methods": [
+        {
+          "id": "networks",
+          "description": "List configured Neptune networks by id",
+          "risk": "read",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/meta/networks",
+          "operation": "networks"
+        },
+        {
+          "id": "status",
+          "description": "Read the local node's chain height for one network",
+          "risk": "read",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/*",
+          "operation": "status"
+        }
+      ]
+    }
+  ],
+  "resources": {
+    "memory_mb": 32,
+    "gpu": false
+  },
+  "permissions": {}
+}

@@ -1,0 +1,33 @@
+[package]
+name = "intents-ui"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Neptune Intents: the capsule's UI in Slint and Rust (wasm32 for the capsule, native for development)"
+
+# One binary: native it opens a window; for wasm32, wasm-bindgen turns it into the capsule page.
+[[bin]]
+name = "intents-ui"
+path = "src/main.rs"
+
+[dependencies]
+intents-protocol = { path = "../intents-protocol" }
+serde_json.workspace = true
+# Same Slint as Hyper's web build: winit drawing with femtovg (WebGL2 on the web).
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "accessibility"] }
+tiny-skia = { version = "0.11", default-features = false, features = ["std"] }
+getrandom = { version = "0.2", features = ["js"] }
+
+# Natively, NEPTUNE_INTENTS_SHOT=<file.png> saves the window as a PNG (development screenshots).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "png-format"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = ["Window", "Location", "Headers", "Request", "RequestInit", "Response", "Crypto", "EventTarget", "Event"] }
+
+[build-dependencies]
+slint-build = "=1.18.1"

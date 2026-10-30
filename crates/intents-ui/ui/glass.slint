@@ -1,0 +1,58 @@
+// Frosted glass the Hyper way (kit.slint HyGlassPanel): Slint has no backdrop filter, so Rust
+// renders the wallpaper and a blurred copy of it once, and every glass panel draws the part of
+// the blurred copy that lies behind it, under the sheet tone, a sheen and a hairline edge.
+
+import { Skin, Look, Rad } from "tokens.slint";
+
+export global Frost {
+    in property <image> wallpaper-dark;
+    in property <image> wallpaper-light;
+    in property <image> frost-dark;
+    in property <image> frost-light;
+    // The window's size: wallpaper and frost both stretch to it, so they line up.
+    in-out property <length> width;
+    in-out property <length> height;
+    out property <image> wallpaper: Look.light ? wallpaper-light : wallpaper-dark;
+    out property <image> frost: Look.light ? frost-light : frost-dark;
+}
+
+export component Wallpaper inherits Image {
+    source: Frost.wallpaper;
+    width: Frost.width;
+    height: Frost.height;
+    image-fit: fill;
+}
+
+export component Glass inherits Rectangle {
+    in property <length> radius: Rad.card;
+    // A panel that floats casts a shadow; one set into another does not.
+    in property <bool> floating: true;
+    // Denser for reading surfaces (the review sheet), lighter for chrome.
+    in property <float> tint: Skin.frost-tint;
+    border-radius: root.radius;
+    drop-shadow-blur: root.floating ? 28px : 0px;
+    drop-shadow-offset-y: root.floating ? 8px : 0px;
+    drop-shadow-color: root.floating ? Skin.shadow : transparent;
+    Rectangle {
+        border-radius: root.radius;
+        clip: true;
+        Image {
+            x: -root.absolute-position.x;
+            y: -root.absolute-position.y;
+            width: Frost.width;
+            height: Frost.height;
+            source: Frost.frost;
+            image-fit: fill;
+        }
+        Rectangle { background: Skin.sheet.with-alpha(root.tint); }
+        // Light from above: brighter toward the top edge.
+        Rectangle { background: @linear-gradient(180deg, #FFFFFF14 0%, #FFFFFF03 100%); }
+        Rectangle { y: 0; height: 1px; background: Look.light ? #FFFFFF99 : #FFFFFF26; }
+        @children
+    }
+    Rectangle {
+        border-radius: root.radius;
+        border-width: 1px;
+        border-color: Skin.edge;
+    }
+}

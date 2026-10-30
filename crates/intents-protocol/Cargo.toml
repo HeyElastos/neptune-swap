@@ -1,0 +1,18 @@
+[package]
+name = "intents-protocol"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Signed wire messages for private Neptune intents: intent, quote, accept"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ed25519-dalek = "2"
+bs58 = "0.5"
+base64 = "0.22"
+thiserror = "2"
+sha2 = "0.10"
+
+[dev-dependencies]
+hex = "0.4"

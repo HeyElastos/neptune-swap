@@ -1,0 +1,80 @@
+// The Hyper design language, Modern look, carried over from Hyper's ui/tokens.slint (SkinOf,
+// Sp, Rad, Ty, Ctl, Motion): graphite or white, gold the only accent, tone and air instead of
+// lines between surfaces.
+
+import { Palette } from "std-widgets.slint";
+
+export global Look {
+    // 0 follows the system, 1 dark, 2 light (a preview or a screenshot can pin it).
+    in-out property <int> pin;
+    out property <bool> light: pin == 0 ? Palette.color-scheme == ColorScheme.light : pin == 2;
+}
+
+export global Skin {
+    property <bool> l: Look.light;
+    out property <color> base: l ? #FFFFFF : #1E1E1E;
+    out property <color> raised: l ? #F5F5F7 : #2C2C2E;
+    out property <color> surface3: l ? #E5E5EA : #3A3A3D;
+    // The tint laid over the frost (SkinOf.sheet without its alpha) and its solid stand-in.
+    out property <color> sheet: l ? #FFFFFF : #28282A;
+    out property <color> glass-solid: l ? #EBEBED : #2B2B2D;
+    out property <color> ink: l ? #1D1D1F : #F2F2F4;
+    out property <color> muted: l ? #57575C : #AEAEB2;
+    out property <color> faint: l ? #66666B : #9C9CA1;
+    out property <color> accent: l ? #E0AE47 : #E7B85A;
+    out property <color> accent-text: l ? #94680F : #E7B85A;
+    out property <color> on-accent: l ? #241A04 : #1A1406;
+    out property <color> edge: l ? #0000001A : #FFFFFF1A;
+    out property <color> on-glass: l ? #0000000B : #FFFFFF12;
+    out property <color> hover: ink.with-alpha(l ? 20 / 255 : 18 / 255);
+    out property <color> track: ink.with-alpha(l ? 16 / 255 : 20 / 255);
+    out property <color> good: l ? #1A7F37 : #32D74B;
+    out property <color> danger: l ? #D70015 : #FF453A;
+    out property <color> connecting: #FF9F0A;
+    out property <color> shadow: l ? #1E263A1F : #00000066;
+    out property <color> scrim: l ? #0000001F : #0000004D;
+    // The frost tint (Hyper frost_tint): how much of the sheet tone covers the blurred backdrop.
+    out property <float> frost-tint: l ? 0.58 : 0.68;
+}
+
+export global Sp {
+    out property <length> xs: 4px;
+    out property <length> s: 8px;
+    out property <length> m: 12px;
+    out property <length> l: 16px;
+    out property <length> xl: 24px;
+    out property <length> xxl: 32px;
+}
+
+export global Rad {
+    out property <length> xs: 6px;
+    out property <length> ctrl: 12px;
+    out property <length> card: 20px;
+    out property <length> pill: 999px;
+}
+
+export global Ty {
+    out property <length> caption: 13px;
+    out property <length> small: 14px;
+    out property <length> body: 16px;
+    out property <length> title: 18px;
+    out property <length> display: 22px;
+    out property <int> bold: 700;
+    out property <int> strong: 600;
+    out property <int> label: 500;
+    out property <int> reading: 400;
+}
+
+export global Ctl {
+    out property <length> s: 32px;
+    out property <length> m: 40px;
+    out property <length> l: 48px;
+}
+
+export global Motion {
+    out property <duration> hover: 100ms;
+    out property <duration> overlay-in: 200ms;
+    out property <duration> overlay-out: 180ms;
+    out property <length> overlay-rise: 10px;
+    out property <easing> ease: cubic-bezier(0.33, 1, 0.68, 1);
+}
