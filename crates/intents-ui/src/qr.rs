@@ -1,0 +1,47 @@
+//! QR codes for short (EC Hybrid) addresses, drawn into a Slint image.
+
+use qrcode::{Color, EcLevel, QrCode};
+use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+
+/// Pixels per module, and the quiet zone in modules (the standard asks for 4;
+/// the white tile around the image adds to it).
+const SCALE: usize = 4;
+const QUIET: usize = 2;
+
+/// The QR code of `text`, black on white, or None when it does not fit.
+/// Bech32 is case-insensitive; upper case uses QR's denser alphanumeric mode.
+pub fn image(text: &str) -> Option<Image> {
+    let code = QrCode::with_error_correction_level(text.to_ascii_uppercase().as_bytes(), EcLevel::M).ok()?;
+    let modules = code.width();
+    let colors = code.to_colors();
+    let side = (modules + 2 * QUIET) * SCALE;
+    let mut buffer = SharedPixelBuffer::<Rgba8Pixel>::new(side as u32, side as u32);
+    let pixels = buffer.make_mut_slice();
+    for (i, pixel) in pixels.iter_mut().enumerate() {
+        let (x, y) = (i % side / SCALE, i / side / SCALE);
+        let dark = x >= QUIET
+            && y >= QUIET
+            && x < modules + QUIET
+            && y < modules + QUIET
+            && colors[(y - QUIET) * modules + (x - QUIET)] == Color::Dark;
+        let v = if dark { 0 } else { 255 };
+        *pixel = Rgba8Pixel { r: v, g: v, b: v, a: 255 };
+    }
+    Some(Image::from_rgba8(buffer))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_short_address_fits_and_an_empty_one_still_encodes() {
+        let short = format!("nolgaz1{}", "q".repeat(120));
+        let image = super::image(&short).expect("fits");
+        assert!(image.size().width > 0 && image.size().width == image.size().height);
+        assert!(super::image("").is_some());
+    }
+
+    #[test]
+    fn a_generation_address_is_too_long() {
+        assert!(super::image(&"q".repeat(9000)).is_none());
+    }
+}

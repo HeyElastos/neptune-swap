@@ -105,6 +105,16 @@ mod web {
         (js_sys::Date::now() / 1000.0) as u64
     }
 
+    /// A block time in the viewer's locale and time zone.
+    pub fn format_time(ms: u64) -> String {
+        let date = js_sys::Date::new(&JsValue::from_f64(ms as f64));
+        let options = Object::new();
+        for (key, value) in [("dateStyle", "medium"), ("timeStyle", "short")] {
+            let _ = Reflect::set(&options, &key.into(), &value.into());
+        }
+        date.to_locale_string("default", &options).as_string().unwrap_or_default()
+    }
+
     /// Home's clipboard bridge (`home:clipboard-*`, schema v1). Home sends `ready` with the
     /// frame's generation; a write request names a purpose Home's policy allows for this app.
     mod clipboard {
@@ -196,7 +206,7 @@ mod web {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{announce, copy_text, home_token, listen_clipboard, now_secs, provider, query};
+pub use web::{announce, copy_text, format_time, home_token, listen_clipboard, now_secs, provider, query};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn home_token() -> Option<String> {
@@ -217,6 +227,24 @@ pub fn listen_clipboard() {}
 #[cfg(not(target_arch = "wasm32"))]
 pub fn copy_text(_token: &str, _purpose: &str, _text: &str, done: Box<dyn FnOnce(Result<(), String>)>) {
     done(Err("unavailable".into()));
+}
+
+/// A block time as UTC (the native development window has no locale to follow).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn format_time(ms: u64) -> String {
+    let secs = ms / 1000;
+    let (days, rest) = (secs / 86_400, secs % 86_400);
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year}-{month:02}-{day:02} {:02}:{:02} UTC", rest / 3600, rest % 3600 / 60)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

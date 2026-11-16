@@ -4,6 +4,7 @@
 
 mod backdrop;
 mod intent;
+mod qr;
 mod runtime;
 mod wallet_ui;
 

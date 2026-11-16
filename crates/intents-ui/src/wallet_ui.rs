@@ -7,14 +7,21 @@ use std::rc::Rc;
 use serde_json::{json, Value};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 
-use crate::{runtime, spawn, AppWindow, WordRow};
+use crate::{runtime, spawn, ActivityRow, AppWindow, WordRow};
+
+/// Address kinds, as the receive switch numbers them and the provider names them.
+const KINDS: [&str; 2] = ["generation", "ec_hybrid"];
+/// Payments the overview lists; the rest are under All activity.
+const OVERVIEW_ROWS: usize = 5;
 
 /// What the page remembers between calls.
 #[derive(Default)]
 struct Page {
     token: Option<String>,
-    /// The full receiving address, for copying; the card shows it shortened.
-    address: String,
+    /// The full current address of each kind, for copying; the card shows it shortened.
+    addresses: [String; 2],
+    /// Every payment, newest first.
+    activity: Vec<ActivityRow>,
 }
 
 type Shared = Rc<RefCell<Page>>;
@@ -109,10 +116,51 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
     }
     {
         let (weak, page) = on(&page);
+        app.on_wallet_start_receive(move || {
+            let app = weak.unwrap();
+            app.set_wallet_error(SharedString::new());
+            app.set_wallet_copy_note(SharedString::new());
+            app.set_wallet_state("receive".into());
+            spawn(load_addresses(weak.clone(), page.clone()));
+        });
+    }
+    {
+        let (weak, page) = on(&page);
+        app.on_wallet_receive_kind_changed(move |_| {
+            if let Some(app) = weak.upgrade() {
+                app.set_wallet_copy_note(SharedString::new());
+            }
+            show_receive(&weak, &page);
+        });
+    }
+    {
+        let (weak, page) = on(&page);
+        app.on_wallet_new_address(move || spawn(new_address(weak.clone(), page.clone())));
+    }
+    {
+        let (weak, page) = on(&page);
+        app.on_wallet_show_history(move || {
+            let app = weak.unwrap();
+            app.set_wallet_activity(ModelRc::new(VecModel::from(page.borrow().activity.clone())));
+            app.set_wallet_state("history".into());
+        });
+    }
+    {
+        let (weak, page) = on(&page);
+        app.on_wallet_close_view(move || {
+            let app = weak.unwrap();
+            app.set_wallet_copy_note(SharedString::new());
+            show_activity(&app, &page.borrow().activity);
+            app.set_wallet_state("ready".into());
+        });
+    }
+    {
+        let (weak, page) = on(&page);
         app.on_wallet_copy_address(move || {
             let (token, address) = {
                 let p = page.borrow();
-                (p.token.clone().unwrap_or_default(), p.address.clone())
+                let kind = weak.upgrade().map_or(0, |app| app.get_wallet_receive_kind() as usize).min(1);
+                (p.token.clone().unwrap_or_default(), p.addresses[kind].clone())
             };
             let weak = weak.clone();
             runtime::copy_text(&token, "neptune.address", &address, Box::new(move |result| {
@@ -258,8 +306,111 @@ async fn sync(weak: Weak<AppWindow>, page: Shared) {
                 format!("{spendable} NPT spendable now; the rest is time-locked.").into()
             });
             app.set_wallet_busy(false);
+            drop(app);
+            load_history(&weak, &page).await;
         }
         Err(message) => fail(&weak, message),
+    }
+}
+
+async fn load_history(weak: &Weak<AppWindow>, page: &Shared) {
+    match call(weak, page, "wallet_history", json!({})).await {
+        Ok(reply) => {
+            let rows: Vec<ActivityRow> = reply["items"].as_array().into_iter().flatten().map(activity_row).collect();
+            page.borrow_mut().activity = rows;
+            if let Some(app) = weak.upgrade() {
+                if app.get_wallet_state() == "history" {
+                    app.set_wallet_activity(ModelRc::new(VecModel::from(page.borrow().activity.clone())));
+                } else {
+                    show_activity(&app, &page.borrow().activity);
+                }
+            }
+        }
+        Err(message) => fail(weak, message),
+    }
+}
+
+fn show_activity(app: &AppWindow, rows: &[ActivityRow]) {
+    let shown: Vec<ActivityRow> = rows.iter().take(OVERVIEW_ROWS).cloned().collect();
+    app.set_wallet_activity(ModelRc::new(VecModel::from(shown)));
+    app.set_wallet_activity_more(rows.len() > OVERVIEW_ROWS);
+}
+
+/// One provider history item as a row: direction, signed amount, what and when.
+pub(crate) fn activity_row(item: &Value) -> ActivityRow {
+    let incoming = item["direction"] == "in";
+    let pending = item["pending"] == true;
+    let amount = item["amount"].as_str().unwrap_or("0");
+    let title = match (incoming, pending) {
+        (true, _) => match item["kind"].as_str() {
+            Some("ec_hybrid") => "Received at a short address",
+            _ => "Received",
+        },
+        (false, true) => "Sending",
+        (false, false) => "Sent",
+    };
+    let detail = if pending {
+        "Waiting for a block".to_string()
+    } else {
+        let block = item["height"].as_u64().map(|h| format!("Block {}", crate::group_thousands(h)));
+        let when = item["time_ms"].as_u64().map(runtime::format_time);
+        [block, when].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+    };
+    ActivityRow {
+        incoming,
+        amount: format!("{}{amount}", if incoming { "+" } else { "−" }).into(),
+        title: title.into(),
+        detail: detail.into(),
+        pending,
+    }
+}
+
+async fn load_addresses(weak: Weak<AppWindow>, page: Shared) {
+    match call(&weak, &page, "wallet_addresses", json!({})).await {
+        Ok(reply) => {
+            {
+                let mut p = page.borrow_mut();
+                for (i, kind) in KINDS.iter().enumerate() {
+                    if let Some(address) = reply[*kind]["address"].as_str() {
+                        p.addresses[i] = address.to_string();
+                    }
+                }
+            }
+            show_receive(&weak, &page);
+        }
+        Err(message) => fail(&weak, message),
+    }
+}
+
+async fn new_address(weak: Weak<AppWindow>, page: Shared) {
+    let Some(app) = weak.upgrade() else { return };
+    let kind = (app.get_wallet_receive_kind() as usize).min(1);
+    app.set_wallet_busy(true);
+    app.set_wallet_copy_note(SharedString::new());
+    drop(app);
+    match call(&weak, &page, "wallet_new_address", json!({ "kind": KINDS[kind] })).await {
+        Ok(reply) => {
+            page.borrow_mut().addresses[kind] = reply["address"].as_str().unwrap_or_default().to_string();
+            show_receive(&weak, &page);
+            if let Some(app) = weak.upgrade() {
+                app.set_wallet_busy(false);
+                app.set_wallet_copy_note("A new address. Earlier ones still receive.".into());
+            }
+        }
+        Err(message) => fail(&weak, message),
+    }
+}
+
+/// The receive view for the chosen kind: shortened address, and a QR code for a short one.
+fn show_receive(weak: &Weak<AppWindow>, page: &Shared) {
+    let Some(app) = weak.upgrade() else { return };
+    let kind = (app.get_wallet_receive_kind() as usize).min(1);
+    let address = page.borrow().addresses[kind].clone();
+    app.set_wallet_address_short(shorten(&address).into());
+    let qr = (kind == 1 && !address.is_empty()).then(|| crate::qr::image(&address)).flatten();
+    app.set_wallet_qr_shown(qr.is_some());
+    if let Some(image) = qr {
+        app.set_wallet_qr(image);
     }
 }
 
@@ -320,7 +471,7 @@ pub(crate) fn check_payment(to: &str, amount: &str, fee: &str) -> Result<String,
 }
 
 fn show_address(weak: &Weak<AppWindow>, page: &Shared, address: &str) {
-    page.borrow_mut().address = address.to_string();
+    page.borrow_mut().addresses[0] = address.to_string();
     if let Some(app) = weak.upgrade() {
         app.set_wallet_address_short(shorten(address).into());
         app.set_wallet_copy_note(SharedString::new());
@@ -382,6 +533,27 @@ fn demo_state(app: &AppWindow, state: &str) {
             let summary = check_payment(&format!("nolgar1{}", "q".repeat(400)), "10", "0.05").unwrap_or_default();
             app.set_wallet_send_summary(summary.into());
         }
+        "wallet-receive" | "wallet-receive-private" => {
+            app.set_wallet_state("receive".into());
+            app.set_wallet_receive_kind(if state == "wallet-receive" { 1 } else { 0 });
+            // After the switch's own change handler, which shows the page's (empty) addresses.
+            let (weak, state) = (app.as_weak(), state.to_string());
+            slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
+                let app = weak.unwrap();
+                let generation = format!("nolgam1{}", "q".repeat(3000));
+                let short = format!("nolgaz1{}", "qpzry9x8gf2tvdw0s3jn54khce6mua7l".repeat(4));
+                app.set_wallet_address_short(shorten(if state == "wallet-receive" { &short } else { &generation }).into());
+                let qr = (state == "wallet-receive").then(|| crate::qr::image(&short)).flatten();
+                app.set_wallet_qr_shown(qr.is_some());
+                if let Some(image) = qr {
+                    app.set_wallet_qr(image);
+                }
+            });
+        }
+        "wallet-history" => {
+            app.set_wallet_state("history".into());
+            app.set_wallet_activity(ModelRc::new(VecModel::from(demo_activity())));
+        }
         "wallet-phrase" => {
             let words: Vec<String> = "abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire"
                 .split(' ')
@@ -396,8 +568,23 @@ fn demo_state(app: &AppWindow, state: &str) {
             app.set_wallet_spendable("10 NPT spendable now; the rest is time-locked.".into());
             app.set_wallet_sync_label(sync_label(Some(62_981), 62_981, true).into());
             app.set_wallet_address_short(shorten(&format!("nolgam1{}", "q".repeat(3000))).into());
+            let rows = demo_activity();
+            show_activity(app, &rows);
         }
     }
+}
+
+fn demo_activity() -> Vec<ActivityRow> {
+    let items = [
+        json!({ "direction": "out", "amount": "10.05", "pending": true }),
+        json!({ "direction": "in", "amount": "25", "height": 212, "time_ms": 1_794_825_766_000u64, "kind": "generation" }),
+        json!({ "direction": "out", "amount": "3.2", "height": 198, "time_ms": 1_794_825_100_000u64 }),
+        json!({ "direction": "in", "amount": "0.75", "height": 150, "time_ms": 1_794_824_000_000u64, "kind": "ec_hybrid" }),
+        json!({ "direction": "in", "amount": "120", "height": 97, "time_ms": 1_794_820_000_000u64, "kind": "generation" }),
+        json!({ "direction": "out", "amount": "40.5", "height": 61, "time_ms": 1_794_810_000_000u64 }),
+        json!({ "direction": "in", "amount": "1", "height": 12, "time_ms": 1_794_800_000_000u64, "kind": "generation" }),
+    ];
+    items.iter().map(activity_row).collect()
 }
 
 #[cfg(test)]
@@ -436,6 +623,25 @@ mod tests {
         assert!(check_payment(&to, "-1", "0.05").is_err());
         assert!(check_payment(&to, "1.2.3", "0.05").is_err());
         assert!(check_payment(&to, "1", "").is_err());
+    }
+
+    #[test]
+    fn history_items_read_as_rows() {
+        let received = activity_row(&json!({ "direction": "in", "amount": "25", "height": 1212, "time_ms": 0, "kind": "generation" }));
+        assert!(received.incoming && !received.pending);
+        assert_eq!(received.amount, "+25");
+        assert_eq!(received.title, "Received");
+        assert_eq!(received.detail, "Block 1,212 · 1970-01-01 00:00 UTC");
+        let sending = activity_row(&json!({ "direction": "out", "amount": "10.05", "pending": true }));
+        assert_eq!((sending.amount.as_str(), sending.title.as_str(), sending.detail.as_str()), ("−10.05", "Sending", "Waiting for a block"));
+        let short = activity_row(&json!({ "direction": "in", "amount": "1", "kind": "ec_hybrid" }));
+        assert_eq!(short.title, "Received at a short address");
+    }
+
+    #[test]
+    fn block_times_format_as_utc_natively() {
+        assert_eq!(crate::runtime::format_time(1_794_825_766_000), "2026-11-16 10:42 UTC");
+        assert_eq!(crate::runtime::format_time(951_782_400_000), "2000-02-29 00:00 UTC");
     }
 
     #[test]

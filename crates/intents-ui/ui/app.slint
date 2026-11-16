@@ -237,6 +237,59 @@ component Field inherits Rectangle {
     }
 }
 
+// One payment in the wallet's activity.
+export struct ActivityRow {
+    incoming: bool,
+    // "+12.5" or "−10".
+    amount: string,
+    title: string,
+    detail: string,
+    pending: bool,
+}
+
+component ActivityItem inherits Rectangle {
+    in property <ActivityRow> entry;
+    height: 52px;
+    HorizontalLayout {
+        spacing: Sp.m;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: 16px;
+                background: root.entry.incoming ? Skin.good.with-alpha(0.16) : Skin.ink.with-alpha(0.08);
+                Text {
+                    text: root.entry.incoming ? "↓" : "↑";
+                    color: root.entry.incoming ? Skin.good : Skin.ink;
+                    font-size: Ty.body;
+                    font-weight: Ty.strong;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            Text { text: root.entry.title; color: Skin.ink; font-size: Ty.body; overflow: elide; }
+            Text {
+                text: root.entry.detail;
+                color: root.entry.pending ? Skin.connecting : Skin.muted;
+                font-size: Ty.caption;
+                overflow: elide;
+            }
+        }
+        Text {
+            text: root.entry.amount + " NPT";
+            color: root.entry.incoming ? Skin.good : Skin.ink;
+            font-size: Ty.body;
+            font-weight: Ty.strong;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+}
+
 // The Neptune wallet. The seed lives with this Home's Neptune provider; the page shows the
 // phrase once, when it is made, and sends a typed one once, to import it.
 component WalletCard inherits VerticalLayout {
@@ -259,6 +312,17 @@ component WalletCard inherits VerticalLayout {
     in-out property <string> send-fee;
     in property <string> send-summary;
     in property <string> notice;
+    // Activity: the latest few on the overview, all in "history".
+    in property <[ActivityRow]> activity;
+    in property <bool> activity-more;
+    // Receive: 0 private (Generation), 1 short (EC Hybrid, with a QR code).
+    in-out property <int> receive-kind;
+    in property <image> qr;
+    in property <bool> qr-shown;
+    callback start-receive();
+    callback close-view();
+    callback new-address();
+    callback show-history();
     callback start-send();
     callback cancel-send();
     callback review-send();
@@ -356,28 +420,87 @@ component WalletCard inherits VerticalLayout {
         alignment: end;
         spacing: Sp.s;
         Button { text: root.busy ? "Syncing…" : "Sync"; primary: false; enabled: !root.busy; clicked => { root.sync(); } }
+        Button { text: "Receive"; primary: false; clicked => { root.start-receive(); } }
         Button { text: "Send"; enabled: !root.busy; clicked => { root.start-send(); } }
     }
-    if root.state == "ready": Rectangle {
-        border-radius: Rad.ctrl;
-        background: Skin.on-glass;
-        height: receive.preferred-height;
-        receive := VerticalLayout {
-            padding: Sp.m;
-            spacing: Sp.xs;
-            Text { text: "Receive at"; color: Skin.muted; font-size: Ty.caption; }
-            // One line, elided on a narrow screen; Copy address takes it whole.
-            Text { text: root.address-short; color: Skin.ink; font-size: Ty.small; overflow: elide; min-width: 0px; }
-            HorizontalLayout {
-                alignment: end;
-                padding-top: Sp.xs;
-                Button { text: "Copy address"; primary: false; clicked => { root.copy-address(); } }
-            }
+    if root.state == "ready" && root.notice != "": Text { text: root.notice; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+
+    // Activity: the latest few.
+    if root.state == "ready": Rectangle { height: 1px; background: Skin.edge; }
+    if root.state == "ready": HorizontalLayout {
+        Text { text: "Activity"; color: Skin.muted; font-size: Ty.caption; vertical-alignment: center; horizontal-stretch: 1; }
+        if root.activity-more: Text {
+            text: "All activity";
+            color: Skin.accent-text;
+            font-size: Ty.small;
+            vertical-alignment: center;
+            TouchArea { mouse-cursor: pointer; clicked => { root.show-history(); } }
         }
     }
+    if root.state == "ready" && root.activity.length == 0: Text { text: "No payments yet."; color: Skin.muted; font-size: Ty.small; }
+    if root.state == "ready": VerticalLayout {
+        for entry in root.activity: ActivityItem { entry: entry; }
+    }
 
-    if root.state == "ready" && root.copy-note != "": Text { text: root.copy-note; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
-    if root.state == "ready" && root.notice != "": Text { text: root.notice; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+    // Receive.
+    if root.state == "receive": Text { text: "Receive NPT"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
+    if root.state == "receive": HorizontalLayout {
+        alignment: start;
+        Segmented { options: ["Private", "Short"]; selected <=> root.receive-kind; }
+    }
+    if root.state == "receive": Text {
+        text: root.receive-kind == 0
+            ? "A Generation address: the most private kind. It is too long for a QR code, so copy it."
+            : "An EC Hybrid address: short enough for a QR code. Whoever knows it can see what it receives, so give each payer a new one.";
+        color: Skin.muted;
+        font-size: Ty.small;
+        wrap: word-wrap;
+    }
+    if root.state == "receive" && root.qr-shown: HorizontalLayout {
+        alignment: center;
+        // Dark on white whatever the look: scanners need the contrast.
+        Rectangle {
+            width: 216px;
+            height: 216px;
+            border-radius: Rad.ctrl;
+            background: #FFFFFF;
+            Image { width: 200px; height: 200px; source: root.qr; image-rendering: pixelated; }
+        }
+    }
+    if root.state == "receive": Rectangle {
+        border-radius: Rad.ctrl;
+        background: Skin.on-glass;
+        height: Ctl.m + Sp.s;
+        // One line, elided; Copy takes it whole.
+        Text {
+            x: Sp.m;
+            width: parent.width - 2 * Sp.m;
+            text: root.address-short;
+            color: Skin.ink;
+            font-size: Ty.small;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+    if root.state == "receive": HorizontalLayout {
+        alignment: end;
+        spacing: Sp.s;
+        Button { text: "New address"; primary: false; enabled: !root.busy; clicked => { root.new-address(); } }
+        Button { text: "Copy"; primary: false; clicked => { root.copy-address(); } }
+        Button { text: "Done"; clicked => { root.close-view(); } }
+    }
+    if root.state == "receive" && root.copy-note != "": Text { text: root.copy-note; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+
+    // All activity.
+    if root.state == "history": Text { text: "Activity"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
+    if root.state == "history" && root.activity.length == 0: Text { text: "No payments yet."; color: Skin.muted; font-size: Ty.small; }
+    if root.state == "history": VerticalLayout {
+        for entry in root.activity: ActivityItem { entry: entry; }
+    }
+    if root.state == "history": HorizontalLayout {
+        alignment: end;
+        Button { text: "Back"; primary: false; clicked => { root.close-view(); } }
+    }
 
     // Send: the form.
     if root.state == "send": Text { text: "Send NPT"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
@@ -530,6 +653,17 @@ export component AppWindow inherits Window {
     in-out property <string> wallet-send-fee: "0.05";
     in property <string> wallet-send-summary;
     in property <string> wallet-notice;
+    in property <[ActivityRow]> wallet-activity;
+    in property <bool> wallet-activity-more;
+    in-out property <int> wallet-receive-kind;
+    in property <image> wallet-qr;
+    in property <bool> wallet-qr-shown;
+    callback wallet-start-receive();
+    callback wallet-close-view();
+    callback wallet-new-address();
+    callback wallet-show-history();
+    callback wallet-receive-kind-changed(int);
+    changed wallet-receive-kind => { root.wallet-receive-kind-changed(self.wallet-receive-kind); }
     callback wallet-start-send();
     callback wallet-cancel-send();
     callback wallet-review-send();
@@ -661,12 +795,22 @@ export component AppWindow inherits Window {
                 }
             }
 
-            // The lane (Hyper Lay.card-max 560). It keeps its own height; the spacer below takes the rest.
-            HorizontalLayout {
+            // The page scrolls under the bar when it is taller than the window (history, a phone).
+            // The lane is Hyper's Lay.card-max, 560.
+            Flickable {
+                vertical-stretch: 1;
+                content-width: self.width;
+                content-height: max(self.height, page.preferred-height);
+                page := HorizontalLayout {
+                // Pinned to the top: a short page would otherwise sit centred.
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: self.preferred-height;
                 alignment: center;
-                vertical-stretch: 0;
                 padding-left: Sp.l;
                 padding-right: Sp.l;
+                padding-bottom: Sp.xl;
                 lane := VerticalLayout {
                     preferred-width: 560px;
                     max-width: 560px;
@@ -747,6 +891,15 @@ export component AppWindow inherits Window {
                             send-fee <=> root.wallet-send-fee;
                             send-summary: root.wallet-send-summary;
                             notice: root.wallet-notice;
+                            activity: root.wallet-activity;
+                            activity-more: root.wallet-activity-more;
+                            receive-kind <=> root.wallet-receive-kind;
+                            qr: root.wallet-qr;
+                            qr-shown: root.wallet-qr-shown;
+                            start-receive => { root.wallet-start-receive(); }
+                            close-view => { root.wallet-close-view(); }
+                            new-address => { root.wallet-new-address(); }
+                            show-history => { root.wallet-show-history(); }
                             start-send => { root.wallet-start-send(); }
                             cancel-send => { root.wallet-cancel-send(); }
                             review-send => { root.wallet-review-send(); }
@@ -834,8 +987,8 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
+                }
             }
-            Rectangle { vertical-stretch: 1; }
         }
 
         // A click outside an open asset popover closes it. The node panel is part of the layout
