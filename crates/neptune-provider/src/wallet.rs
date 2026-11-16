@@ -418,11 +418,16 @@ mod tests {
         wallets.create("neptune-main", Network::Main, &node).unwrap();
         let lock = wallets.htlc_claim_lock("neptune-main", Network::Main).unwrap();
         let claim_lock = lock["claim_lock"].as_str().unwrap();
-        let past = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", claim_lock, 1_000, 2_000, &node);
+        let past = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", claim_lock, 1_000, None, 2_000, &node);
         assert!(past.unwrap_err().to_string().contains("future"));
-        let bad = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", "not a digest", 3_000, 2_000, &node);
+        let bad = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", "not a digest", 3_000, None, 2_000, &node);
         assert!(bad.unwrap_err().to_string().contains("claim lock"));
         assert!(wallets.htlc_secret("neptune-main", "nope").is_err());
+        let prepared = wallets.htlc_prepare("neptune-main", Network::Main).unwrap();
+        assert_eq!(prepared["hash_lock"].as_str().unwrap().len(), 64);
+        assert!(prepared["hash_lock"].as_str().unwrap().starts_with(prepared["swap_id"].as_str().unwrap()));
+        let unknown = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", claim_lock, 3_000, Some("nope"), 2_000, &node);
+        assert!(unknown.unwrap_err().to_string().contains("no such prepared swap"));
         assert!(wallets.htlc_status("neptune-main", None, None, 0, &node).is_err());
         fs::remove_dir_all(root).unwrap();
     }

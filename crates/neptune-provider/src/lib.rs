@@ -83,12 +83,17 @@ enum Request {
     HtlcClaimLock {
         network: String,
     },
+    HtlcPrepare {
+        network: String,
+    },
     HtlcLock {
         network: String,
         amount: String,
         fee: String,
         claim_lock: String,
         refund_after_ms: u64,
+        #[serde(default)]
+        swap_id: Option<String>,
     },
     HtlcStatus {
         network: String,
@@ -253,8 +258,9 @@ impl Provider {
                 w.wallets.send(&n.id, n.chain, &to, &amount, &fee, now_ms(), &HttpNode(n.rpc.clone()))
             }),
             Request::HtlcClaimLock { network } => self.wallet(&network, |w, n| w.wallets.htlc_claim_lock(&n.id, n.chain)),
-            Request::HtlcLock { network, amount, fee, claim_lock, refund_after_ms } => self.wallet(&network, |w, n| {
-                w.wallets.htlc_lock(&n.id, n.chain, &amount, &fee, &claim_lock, refund_after_ms, now_ms(), &HttpNode(n.rpc.clone()))
+            Request::HtlcPrepare { network } => self.wallet(&network, |w, n| w.wallets.htlc_prepare(&n.id, n.chain)),
+            Request::HtlcLock { network, amount, fee, claim_lock, refund_after_ms, swap_id } => self.wallet(&network, |w, n| {
+                w.wallets.htlc_lock(&n.id, n.chain, &amount, &fee, &claim_lock, refund_after_ms, swap_id.as_deref(), now_ms(), &HttpNode(n.rpc.clone()))
             }),
             Request::HtlcStatus { network, swap_id, note, from_height } => self.wallet(&network, |w, n| {
                 w.wallets.htlc_status(&n.id, swap_id.as_deref(), note, from_height, &HttpNode(n.rpc.clone()))

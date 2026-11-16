@@ -37,6 +37,16 @@ struct Book {
     /// The next swap key index (claim and refund keys share the sequence).
     next_index: u64,
     locks: Vec<Lock>,
+    /// Secrets made before their lock (`htlc_prepare`): the NPT giver puts the
+    /// hash lock in its Accept, then locks.
+    #[serde(default)]
+    prepared: Vec<Prepared>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Prepared {
+    id: String,
+    secret: String,
 }
 
 impl Wallets {
@@ -75,9 +85,21 @@ impl Wallets {
         Ok(json!({ "index": index, "claim_lock": wallet.swap_lock(index).to_hex() }))
     }
 
+    /// Makes a swap's secret ahead of its lock and returns the hash lock, for
+    /// the NPT giver's Accept. `htlc_lock` with this `swap_id` uses it.
+    pub fn htlc_prepare(&self, network_id: &str, network: Network) -> Result<Value> {
+        self.load(network_id, network)?.context("no wallet")?;
+        let (secret, hash_lock) = new_secret();
+        let id = hex(&hash_lock)[..16].to_string();
+        let mut book = self.book(network_id)?;
+        book.prepared.push(Prepared { id: id.clone(), secret: hex(&secret) });
+        self.save_book(network_id, &book)?;
+        Ok(json!({ "swap_id": id, "hash_lock": hex(&hash_lock) }))
+    }
+
     /// Locks `amount` NPT for the holder of `claim_lock`, refundable to this
-    /// wallet from `refund_after_ms`. The secret is made here: the NPT giver
-    /// holds it.
+    /// wallet from `refund_after_ms`. The secret is made here, or taken from
+    /// `htlc_prepare` (`swap_id`): the NPT giver holds it.
     pub fn htlc_lock(
         &self,
         network_id: &str,
@@ -86,12 +108,23 @@ impl Wallets {
         fee: &str,
         claim_lock: &str,
         refund_after_ms: u64,
+        prepared: Option<&str>,
         now_ms: u64,
         node: &dyn Node,
     ) -> Result<Value> {
         ensure!(refund_after_ms > now_ms, "the refund time must be in the future");
         let claim_lock = light_core::neptune_wallet::twenty_first::prelude::Digest::try_from_hex(claim_lock.trim())
             .context("the claim lock is not a digest")?;
+        let prepared = match prepared {
+            None => None,
+            Some(id) => {
+                let book = self.book(network_id)?;
+                let p = book.prepared.iter().find(|p| p.id == id).context("no such prepared swap")?;
+                let secret: [u8; 32] =
+                    hex_bytes(&p.secret)?.try_into().map_err(|_| anyhow::anyhow!("a stored secret is not 32 bytes"))?;
+                Some((id.to_string(), secret))
+            }
+        };
         let mut wallet = self.load(network_id, network)?.context("no wallet")?;
         let tip = catch_up(&mut wallet, node)?;
         let plan = wallet.plan_spend(amount, fee, now_ms)?;
@@ -100,7 +133,13 @@ impl Wallets {
         )?;
         let mut book = self.book(network_id)?;
         let refund_index = self.take_index(network_id, &mut book)?;
-        let (secret, hash_lock) = new_secret();
+        let (secret, hash_lock) = match prepared {
+            None => new_secret(),
+            Some((id, secret)) => {
+                book.prepared.retain(|p| p.id != id);
+                (secret, light_core::swap::hash_lock_of(&secret))
+            }
+        };
         let (details, note) =
             wallet.build_htlc_lock(&plan, hash_lock, refund_after_ms, claim_lock, refund_index, snapshot, now_ms)?;
         // Keep the secret before anything is sent: a lock whose secret was

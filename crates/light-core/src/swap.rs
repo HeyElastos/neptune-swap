@@ -236,9 +236,14 @@ impl LightWallet {
 
 /// A fresh 32-byte secret and its SHA-256 hash lock (the NPT giver's).
 pub fn new_secret() -> ([u8; 32], [u8; 32]) {
-    use sha2::Digest as _;
     let secret: [u8; 32] = rand::random();
-    (secret, sha2::Sha256::digest(secret).into())
+    (secret, hash_lock_of(&secret))
+}
+
+/// SHA-256 of the 32-byte secret: the hash lock on every chain of the swap.
+pub fn hash_lock_of(secret: &[u8; 32]) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(secret).into()
 }
 
 pub fn hex(bytes: &[u8]) -> String {
