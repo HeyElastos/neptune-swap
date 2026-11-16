@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Tip verification bench</title>
+<pre id="out">loading…</pre>
+<script type="module">
+import init, { verifyTip } from "./pkg/light_wasm.js";
+const out = document.getElementById("out");
+const log = (s) => { out.textContent += "\n" + s; };
+async function gunzip(url) {
+  const r = await fetch(url);
+  return await new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text();
+}
+try {
+  let t = performance.now();
+  await init();
+  log(`wasm init: ${(performance.now() - t).toFixed(0)} ms`);
+  const tip = await gunzip("main-tip.json.gz");
+  const parent = await gunzip("main-parent.json.gz");
+  const tipMs = JSON.parse(tip).result.block.kernel.header.timestamp;
+  for (let i = 0; i < 3; i++) {
+    t = performance.now();
+    const v = JSON.parse(await verifyTip(tip, parent, tipMs + 60000));
+    log(`run ${i + 1}: verified tip ${v.height} in ${(performance.now() - t).toFixed(0)} ms`);
+  }
+  // A changed PoW root must fail; edit the text, since JSON.parse rounds u64s.
+  const root = tip.match(/"root":"([0-9a-f]{80})"/)[1];
+  const bad = tip.replace(`"root":"${root}"`, `"root":"${"0".repeat(80)}"`);
+  try { await verifyTip(bad, parent, tipMs + 60000); log("TAMPERED TIP PASSED (bad)"); }
+  catch (e) { log(`tampered tip rejected: ${e.message}`); }
+  // And the real one still verifies after a rejection (no cached verdicts).
+  t = performance.now();
+  const again = JSON.parse(await verifyTip(tip, parent, tipMs + 60000));
+  log(`after rejection: verified tip ${again.height} in ${(performance.now() - t).toFixed(0)} ms`);
+  log("done");
+} catch (e) { log("error: " + (e && e.stack || e)); }
+</script>

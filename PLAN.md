@@ -173,9 +173,18 @@ this project, and what it does not:
 - **Validation without trusting the node.** Download one block and verify its proof: that
   certifies the chain's validity, the mutator set and block MMR accumulators, and the
   cumulative proof-of-work used to pick the canonical fork. The public node serves the tip
-  proof (`chain_tipProof`, ~2.4 MB hex JSON). Not built: light-core still trusts the node.
-  To check: whether the recursion reaches below 62,500 (pre-epsilon blocks lack the claim),
-  and how long triton-vm's verifier takes in wasm.
+  proof (`chain_tipProof`, ~2.4 MB hex JSON).
+  **Built 2026-11-16:** `light_core::tip::verify_tip` (tip from `chain_tip`, parent from
+  `wallet_getBlocks`) runs neptune-core's own `Block::validate_tip` against the parent's
+  mutator set (its hash is bound by the proven claim), checks the tip's PoW against the
+  parent's proven difficulty, and requires the proven chain to sit on main-net block 62,499
+  (`402f082e…`). The recursion stops at the activation height, so that hash is a compiled-in
+  checkpoint, read from wallet.neptunefundamentals.org (only block at that height, equal to
+  62,500's parent): confirm it against an own node. Real tip 62,981: 1.46 s natively;
+  in the browser (wasm, `scripts/build-tip-bench.sh`) 1.6 s the first time, then ~120 ms.
+  A changed proof, PoW root, parent, clock or network fails (6 tests). Not yet used by
+  the wallet scan or swap-guard. A light client must also compare `work_since_activation`
+  across the tips it sees to pick the heaviest chain.
 - **Not succinct asset management.** A wallet still has to find its coins (scan blocks, or
   the UTXO index, which reveals them) and keep membership proofs current (process each block
   while online, ask an archival node, or download the blocks it missed). Neptune's docs call
