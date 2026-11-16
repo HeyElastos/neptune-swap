@@ -1,0 +1,17 @@
+[package]
+name = "solver"
+description = "Neptune swaps: the solver and user roles over both legs (Neptune HTLC through neptune-provider, EVM HTLC through evm-signer)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+intents-protocol = { path = "../intents-protocol" }
+evm-htlc = { path = "../evm-htlc" }
+evm-signer = { path = "../evm-signer" }
+light-core = { path = "../light-core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+ed25519-dalek = "2"
+rand = "0.10"
