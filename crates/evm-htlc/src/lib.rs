@@ -72,6 +72,52 @@ pub fn refund(id: &Word) -> Vec<u8> {
     call("refund(bytes32)", &[*id])
 }
 
+/// `locks(id)`: the public getter of a lock's terms and state.
+pub fn locks(id: &Word) -> Vec<u8> {
+    call("locks(bytes32)", &[*id])
+}
+
+/// A lock as `locks(id)` returns it. An unknown id comes back all zero
+/// (`sender` zero).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LockView {
+    pub sender: Address,
+    pub receiver: Address,
+    pub token: Address,
+    pub amount: u128,
+    pub hash_lock: Word,
+    pub refund_after: u64,
+    pub spent: bool,
+}
+
+pub fn decode_lock(ret: &[u8]) -> Option<LockView> {
+    if ret.len() != 7 * 32 {
+        return None;
+    }
+    let word = |i: usize| -> &[u8] { &ret[i * 32..(i + 1) * 32] };
+    let address = |i: usize| -> Option<Address> {
+        let w = word(i);
+        w[..12].iter().all(|b| *b == 0).then(|| w[12..].try_into().unwrap())
+    };
+    let small = |i: usize, bytes: usize| -> Option<&[u8]> {
+        let w = word(i);
+        w[..32 - bytes].iter().all(|b| *b == 0).then(|| &w[32 - bytes..])
+    };
+    Some(LockView {
+        sender: address(0)?,
+        receiver: address(1)?,
+        token: address(2)?,
+        amount: u128::from_be_bytes(small(3, 16)?.try_into().ok()?),
+        hash_lock: word(4).try_into().ok()?,
+        refund_after: u64::from_be_bytes(small(5, 8)?.try_into().ok()?),
+        spent: match small(6, 1)? {
+            [0] => false,
+            [1] => true,
+            _ => return None,
+        },
+    })
+}
+
 /// The id the contract gives a lock with these terms (`lockId`).
 pub fn lock_id(sender: &Address, receiver: &Address, token: &Address, amount: u128, hash_lock: &Word, refund_after: u64) -> Word {
     let words = [
@@ -178,6 +224,24 @@ mod tests {
         assert_eq!(claimed_secret(&log, &[0xdd; 20], &id, &lock), None, "another contract");
         assert_eq!(claimed_secret(&log, &contract, &[8; 32], &lock), None, "another lock");
         assert_eq!(claimed_secret(&log, &contract, &id, &[0; 32]), None, "does not open the hash lock");
+    }
+
+    #[test]
+    fn a_lock_view_decodes_and_refuses_odd_words() {
+        let mut ret = vec![0u8; 7 * 32];
+        ret[12..32].copy_from_slice(&[0xaa; 20]);
+        ret[32 + 12..64].copy_from_slice(&[0xbb; 20]);
+        ret[3 * 32 + 31] = 5;
+        ret[4 * 32..5 * 32].copy_from_slice(&[7; 32]);
+        ret[5 * 32 + 31] = 9;
+        ret[6 * 32 + 31] = 1;
+        let v = decode_lock(&ret).unwrap();
+        assert_eq!((v.sender, v.receiver, v.token), ([0xaa; 20], [0xbb; 20], [0; 20]));
+        assert_eq!((v.amount, v.hash_lock, v.refund_after, v.spent), (5, [7; 32], 9, true));
+        ret[6 * 32 + 31] = 2;
+        assert!(decode_lock(&ret).is_none(), "a bool is 0 or 1");
+        assert!(decode_lock(&ret[..32]).is_none());
+        assert_eq!(hex(&locks(&[0; 32])[..4]), "0xed5e8437"); // cast sig "locks(bytes32)"
     }
 
     #[test]
