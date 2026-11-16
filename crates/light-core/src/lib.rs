@@ -38,6 +38,7 @@ use serde::Serialize;
 use tasm_lib::prelude::Digest;
 use tasm_lib::prelude::Tip5;
 
+pub use neptune_consensus;
 pub use neptune_primitives;
 pub use neptune_rpc_api;
 pub use neptune_wallet;
