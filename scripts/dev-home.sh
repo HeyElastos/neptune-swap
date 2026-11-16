@@ -13,5 +13,9 @@ export ELASTOS_COLLABORATION_STARTUP_MODE=isolated
 # net needs real proving. neptune-regtest is the local node (scripts/regtest-node.sh).
 export NEPTUNE_PROVIDER_CONFIG='{"allow_remote_nodes":true,"networks":[{"id":"neptune-main","rpc":"https://wallet.neptunefundamentals.org"},{"id":"neptune-regtest","rpc":"http://127.0.0.1:9797"}]}'
 export NEPTUNE_PROVIDER_DATA="$DEV_HOME/neptune-provider-data"
+# chain-provider's "Base" is the local anvil chain (chain id 8453) when one runs
+# on 127.0.0.1:8545: Wallet signs as for Base, with local play money only.
+# Start it with: anvil --chain-id 8453 --port 8545 --host 127.0.0.1
+export BASE_RPC_URL="${BASE_RPC_URL:-http://127.0.0.1:8545}"
 cd "$DEV_HOME"
 exec "$RUNTIME" gateway --addr localhost:61180
