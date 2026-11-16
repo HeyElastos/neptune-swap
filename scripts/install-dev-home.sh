@@ -11,6 +11,8 @@ DATA="$DEV_HOME/Library/Application Support/elastos"
 REAL="$HOME/Library/Application Support/elastos"
 [ "$(cd "$DATA" && pwd -P)" != "$(cd "$REAL" 2>/dev/null && pwd -P || echo none)" ] || { echo "refusing: $DATA is the real Home" >&2; exit 1; }
 test -f "$DATA/components.json" || { echo "no dev Home at $DATA" >&2; exit 1; }
+# The Runtime refuses a principal root whose data folder others can read.
+chmod 700 "$DATA"
 test -f capsules/neptune-intents/browser/pkg/intents-ui_bg.wasm || { echo "build first: scripts/build-intents-capsule.sh" >&2; exit 1; }
 rm -rf "$DATA/capsules/neptune-intents"
 cp -R capsules/neptune-intents "$DATA/capsules/neptune-intents"
