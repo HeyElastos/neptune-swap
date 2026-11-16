@@ -167,7 +167,7 @@ capsule" is the wallet's UI. Everything is developed against a local **regtest**
 | M4 | Wallet in the provider: create/import seed, receive address, sync with light-core, balance; persisted state | **done**, verified on regtest: received 25 NPT from the node |
 | M5 | Send: membership proofs from the own node (`wallet_restoreMembershipProof`), `TransactionDetails` → `ProofCollection` (mock on regtest) → `wallet_submitTransaction` | **done on regtest** (2026-11-16): `wallet_send` paid 10 NPT + 0.05 fee to the node, mined in ~12 s; the wallet saw the spend and found its 14.95 change. Real `ProofCollection` proving (main net/testnet) not built |
 | M6 | Wallet screens in the capsule (Slint): address + QR, balance, history, send | create/back up/import/sync/balance/receive/copy and send (form → review → confirm) built; history and QR not yet; not yet seen inside the dev Home (the user creates its passkey) |
-| M7 | Neptune HTLC lock/claim/refund in the provider (`crates/htlc`), swap-guard on the verified tip | |
+| M7 | Neptune HTLC lock/claim/refund in the provider (`crates/htlc`), swap-guard on the verified tip | **lock → claim and lock → refund done on regtest** (2026-11-16, release provider, two wallets): see "HTLC on regtest" below. swap-guard on the verified tip not wired yet; the capsule does not call the htlc ops yet (gateway list unchanged) |
 | M8 | Other leg through elastOS Wallet: the fork lets the capsule request `wallet`/`chain` approvals; EVM HTLC contract and Bitcoin HTLC script on their testnets | |
 | M9 | Solver + transport over the carrier; end-to-end swap on regtest/testnets | |
 
@@ -227,6 +227,36 @@ this project, and what it does not:
   it could check the lock's block against the tip's block MMR (an MMR membership proof of
   that block's hash) and the lock's addition record against that block: the receiver would
   then trust no node for the lock it checks. Not built.
+
+## HTLC on regtest (2026-11-16)
+
+Provider ops (per network, state in `<network>/swaps.json`, 0600, plain text, development
+only): `htlc_claim_lock`, `htlc_lock {amount, fee, claim_lock, refund_after_ms}` (makes and
+stores the secret first: the NPT giver holds it), `htlc_status {swap_id | note + from_height}`,
+`htlc_secret {swap_id}`, `htlc_claim {note, preimage, claim_index, fee, from_height}`,
+`htlc_refund {swap_id, fee}`. The lock output has no on-chain notification; the counterparty
+gets an `HtlcNote` (terms + coin opening). Swap keys come from the seed.
+
+Results: lock 5 NPT → claim with the revealed secret, twice (receiver +4.95 each); lock 3 NPT →
+refund before T refused → refund after T (giver 4.75 → 4.65). What this does and does not show:
+
+- **Regtest mocks proofs, so the node never ran the HTLC script.** It accepted and mined the
+  transactions (kernel rules, upgrader, composer). The script itself is checked locally before
+  submitting (`light_core::send::check_witness`) and by the htlc crate's real-STARK test. Real
+  enforcement by a node needs testnet/main net with real `ProofCollection` proving (not built).
+- **`PrimitiveWitness::validate` cannot check scripts that read the kernel**: it gives lock
+  scripts the hash of the whole witness, while `ProofCollection` gives the kernel MAST hash.
+  `check_witness` runs lock scripts with the kernel hash and leaves the rest to `validate`.
+  Worth reporting upstream.
+- Each `TransactionDetails::primitive_witness()` call rebuilds the kernel with freshly
+  encrypted notifications: a refund's timestamp path is read from the one assembled witness
+  that is then proven (`prove_witness`).
+- A lock submitted while the regtest node made ~100 blocks between upgrader ticks stayed in the
+  mempool ("Could not find mutator set update for update job"); restarting the node cleared it
+  and the next attempt went through. With real block times this should not bite, but the
+  wallet needs **rebroadcast/rebuild of a stuck transaction** (not built).
+- The dev Home has the new provider binary and checksum; its running providers switch at the
+  next dev Home restart.
 
 ## Open questions
 
