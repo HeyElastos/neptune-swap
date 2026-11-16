@@ -228,6 +228,28 @@ this project, and what it does not:
   that block's hash) and the lock's addition record against that block: the receiver would
   then trust no node for the lock it checks. Not built.
 
+## M8 design: the other leg through elastOS Wallet (read from runtime v2.0.1)
+
+What elastOS 2.0.1 offers (`docs/CHAIN_PROVIDER.md`, `docs/WALLET_PROVIDER.md`):
+- **EVM, yes.** The built-in managed wallet has one EVM key for ESC (chain 20) and Base (8453).
+  A transaction goes chain-provider `prepare_transaction` (unsigned EIP-155 legacy intent with
+  nonce, gas, chain id, to, value and data bound; contract calls allowed) → a Wallet approval the
+  user signs with a fresh passkey in the Wallet app → chain-provider `broadcast_transaction`.
+  Reads (`receipt`, `transaction`, `contract_call`) let the NPT side watch the other lock.
+- **Bitcoin, no.** The managed Bitcoin key (P2WPKH) only signs BIP-322 proofs; chain-provider only
+  reads Bitcoin. A BTC leg needs Elacity to add transaction signing (or a UniSat PSBT handoff).
+- **Main nets only** in the default list (ESC, Base, BTC). chain-provider takes `BASE_RPC_URL`
+  and accepts loopback without configuration, so a local EVM chain started with chain id 8453
+  can stand in for Base in the dev Home: Wallet signs as usual, no real money.
+- **App route:** the Browser app already has `/api/apps/browser/wallet/{request-transaction,
+  read, broadcast-transaction, approvals/:id}`, gated by `require_runtime_wallet_authority(…,
+  &[BROWSER_CAPSULE_ID])`. The fork can let `neptune-intents` use the same handlers.
+
+Plan: (1) an EVM HTLC contract (SHA-256 hash lock, claim to the claimer, refund after T) with
+tests on a local chain; (2) ABI encoding for lock/claim/refund in Rust; (3) the fork route so
+the capsule asks Wallet for those transactions; (4) the swap flow ETH ↔ NPT on the local chain,
+then USDC (ERC-20 approve + lock). Tooling needed: Foundry (anvil, forge, solc), not installed.
+
 ## HTLC on regtest (2026-11-16)
 
 Provider ops (per network, state in `<network>/swaps.json`, 0600, plain text, development
