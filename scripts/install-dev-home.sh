@@ -25,4 +25,43 @@ manifest["external"]["neptune-intents"] = {
 }
 json.dump(manifest, open(path, "w"), indent=2)
 PY
-echo "installed neptune-intents into $DATA"
+
+# The provider: release build, installed as bin/neptune-provider with its
+# checksum, as the Runtime verifies before it starts a native provider.
+nice -n 10 cargo build --release -p neptune-provider
+install -m 0755 target/release/neptune-provider "$DATA/bin/neptune-provider"
+SUM="sha256:$(shasum -a 256 "$DATA/bin/neptune-provider" | cut -d' ' -f1)"
+SIZE="$(stat -f %z "$DATA/bin/neptune-provider")"
+python3 -I - "$DATA/components.json" "$SUM" "$SIZE" <<'PY'
+import json, sys
+path, checksum, size = sys.argv[1], sys.argv[2], int(sys.argv[3])
+manifest = json.load(open(path))
+manifest["external"]["neptune-provider"] = {
+    "install_path": "bin/neptune-provider",
+    "description": "Neptune wallet and node access (development)",
+    "provider_runtime": {
+        "role": "provider", "substrate": "native", "runtime_abi": "elastos.provider-stdio/v1",
+        "execution": "native-provider", "provides": "elastos://neptune/*",
+    },
+    "platforms": {"darwin-arm64": {"checksum": checksum, "size": size, "install_path": "bin/neptune-provider"}},
+}
+json.dump(manifest, open(path, "w"), indent=2)
+PY
+
+# Home's clipboard bridge allows only listed apps; let this one copy its address.
+python3 -I - "$DATA/capsules/home/browser/home-clipboard-protocol.js" <<'PY'
+import sys
+path = sys.argv[1]
+source = open(path).read()
+anchor = "const HOME_CLIPBOARD_TARGET_PURPOSE_POLICY = Object.freeze({\n"
+entry = ('  "neptune-intents": Object.freeze({\n'
+         '    "neptune.address": Object.freeze({\n'
+         '      operations: Object.freeze(["write"]),\n'
+         '      maxUtf8Bytes: MAX_HOME_CLIPBOARD_TEXT_UTF8_BYTES,\n'
+         '    }),\n'
+         '  }),\n')
+if '"neptune-intents"' not in source:
+    assert anchor in source, "Home's clipboard policy moved"
+    open(path, "w").write(source.replace(anchor, anchor + entry, 1))
+PY
+echo "installed neptune-intents and neptune-provider into $DATA"
