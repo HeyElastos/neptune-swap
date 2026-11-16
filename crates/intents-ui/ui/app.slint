@@ -329,7 +329,9 @@ component OffersCard inherits VerticalLayout {
     in property <string> pair;
     in property <string> status;
     in property <[AddressRow]> rows;
+    in property <bool> on;
     callback take(int);
+    callback show();
     padding: Sp.l;
     spacing: Sp.s;
     HorizontalLayout {
@@ -338,6 +340,12 @@ component OffersCard inherits VerticalLayout {
         Text { text: root.pair; color: Skin.muted; font-size: Ty.caption; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
     }
     Text { text: root.status; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+    if !root.on: Text {
+        text: "Show open offers";
+        color: Skin.accent-text;
+        font-size: Ty.small;
+        TouchArea { mouse-cursor: pointer; clicked => { root.show(); } }
+    }
     for entry[i] in root.rows: AddressItem { entry: entry; open => { root.take(i); } }
 }
 
@@ -782,6 +790,8 @@ export component AppWindow inherits Window {
     in property <string> offers-status;
     in property <[AddressRow]> offer-rows;
     callback take-offer(int);
+    in property <bool> offers-on;
+    callback show-offers();
     in property <string> solver-did;
     in-out property <int> solver-side;
     in-out property <int> solver-other;
@@ -1243,7 +1253,9 @@ export component AppWindow inherits Window {
                             pair: root.offers-pair;
                             status: root.offers-status;
                             rows: root.offer-rows;
+                            on: root.offers-on;
                             take(i) => { root.take-offer(i); }
+                            show => { root.show-offers(); }
                         }
                     }
                 }

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use intents_protocol::{decode, mul_div, Amount, Asset, Net, Offer, MAX_MESSAGE_BYTES, PROTOCOL_VERSION};
+use intents_protocol::{decode, mul_div, Amount, Asset, Net, Offer, MAX_MESSAGE_BYTES, MAX_TTL_SECS, PROTOCOL_VERSION};
 
 use crate::intent::{AssetDef, ASSETS};
 
@@ -14,6 +14,7 @@ use crate::intent::{AssetDef, ASSETS};
 pub const PER_SOLVER: usize = 5;
 pub const TOTAL: usize = 200;
 
+#[derive(Clone)]
 pub struct Listed {
     pub offer: Offer,
     pub solver: String,
@@ -22,6 +23,9 @@ pub struct Listed {
 #[derive(Default)]
 pub struct Board {
     offers: HashMap<(String, String), Listed>,
+    /// Withdrawn offers, until no earlier copy can still be live: a replayed
+    /// or late copy does not bring one back.
+    withdrawn: HashMap<(String, String), u64>,
 }
 
 impl Board {
@@ -37,10 +41,20 @@ impl Board {
         let key = (solver.clone(), decoded.body.id.clone());
         if decoded.body.withdrawn {
             self.offers.remove(&key);
+            self.withdrawn.insert(key, now + MAX_TTL_SECS);
             return Ok(());
         }
+        if self.withdrawn.contains_key(&key) {
+            return Err("withdrawn".into());
+        }
         if let Some(old) = self.offers.get(&key) {
-            if old.offer.expires_at >= decoded.body.expires_at {
+            // A copy may only live longer; new terms need a new id, so the row a
+            // user reads is the offer it takes.
+            let same_terms = Offer { expires_at: old.offer.expires_at, ..decoded.body.clone() } == old.offer;
+            if !same_terms {
+                return Err("changed terms under the same id".into());
+            }
+            if decoded.body.expires_at <= old.offer.expires_at {
                 return Ok(()); // an older copy
             }
         } else {
@@ -50,8 +64,11 @@ impl Board {
             }
             if self.offers.len() >= TOTAL {
                 self.prune(now);
-                if self.offers.len() >= TOTAL {
-                    return Err("the list is full".into());
+            }
+            if self.offers.len() >= TOTAL {
+                // Make room: the offer that ends soonest goes.
+                if let Some(k) = self.offers.iter().min_by_key(|(_, l)| l.offer.expires_at).map(|(k, _)| k.clone()) {
+                    self.offers.remove(&k);
                 }
             }
         }
@@ -61,25 +78,37 @@ impl Board {
 
     pub fn prune(&mut self, now: u64) {
         self.offers.retain(|_, l| l.offer.expires_at > now);
+        self.withdrawn.retain(|_, until| *until > now);
     }
 
     /// The live offers a user who gives `give` and wants `want` can take,
-    /// best rate for the user first.
-    pub fn matching(&self, give: &str, want: &str, now: u64) -> Vec<&Listed> {
+    /// best rate for the user first. Assets match on chain and symbol.
+    pub fn matching(&self, give: &Asset, want: &Asset, now: u64) -> Vec<&Listed> {
         let mut rows: Vec<&Listed> = self
             .offers
             .values()
-            .filter(|l| l.offer.expires_at > now && l.offer.want.symbol == give && l.offer.give.symbol == want)
+            .filter(|l| l.offer.expires_at > now && l.offer.want == *give && l.offer.give == *want)
             .collect();
         // More of `want` per unit of `give` first.
         rows.sort_by(|a, b| user_rate(&b.offer).partial_cmp(&user_rate(&a.offer)).unwrap_or(std::cmp::Ordering::Equal));
         rows
     }
 
+    /// The offer as listed now, if it still is.
+    pub fn get(&self, solver: &str, id: &str) -> Option<&Listed> {
+        self.offers.get(&(solver.to_string(), id.to_string()))
+    }
+
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.offers.len()
     }
+}
+
+/// The asset the form's row `index` stands for, if it can be swapped.
+pub fn asset_at(index: usize) -> Option<Asset> {
+    let d = ASSETS.get(index)?;
+    Some(Asset { chain: d.chain?, symbol: d.symbol.into() })
 }
 
 fn def(symbol: &str) -> Option<&'static AssetDef> {
@@ -135,10 +164,11 @@ pub fn npt_limits(o: &Offer) -> (f64, f64) {
     }
 }
 
-/// "did:key:z6Mk…AbCd".
+/// "did:key:z6Mk" is the same for every Ed25519 key: what tells solvers apart
+/// is shown as 8 + 8 characters after it (58^16 tries to imitate).
 pub fn short_did(did: &str) -> String {
-    match did.strip_prefix("did:key:") {
-        Some(k) if k.len() > 10 => format!("did:key:{}…{}", &k[..4], &k[k.len() - 4..]),
+    match did.strip_prefix("did:key:z6Mk") {
+        Some(k) if k.len() > 20 => format!("{}…{}", &k[..8], &k[k.len() - 8..]),
         _ => did.to_string(),
     }
 }
@@ -153,7 +183,7 @@ pub fn describe(l: &Listed, now: u64) -> (String, String) {
     let left = o.expires_at.saturating_sub(now) / 60;
     (
         format!("{side} · 1 NPT = {} {other}", fmt(price)),
-        format!("{}–{} NPT · {} · {} min", fmt(min), fmt(max), short_did(&l.solver).trim_start_matches("did:key:"), left.max(1)),
+        format!("{}–{} NPT · {} · {} min", fmt(min), fmt(max), short_did(&l.solver), left.max(1)),
     )
 }
 
@@ -223,7 +253,7 @@ pub fn offer_from(form: &SolverForm, id: String, now: u64) -> Result<Offer, Stri
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
-    use intents_protocol::Signed;
+    use intents_protocol::{DidKey, Signed};
 
     fn published(o: &Offer, seed: u8) -> String {
         URL_SAFE_NO_PAD.encode(Signed::sign(o, &SigningKey::from_bytes(&[seed; 32]), Net::Main).unwrap().encode().unwrap())
@@ -258,11 +288,20 @@ mod tests {
         assert_eq!(fmt(10_000.0), "10,000");
         assert_eq!(fmt(64_505.9), "64,505.9");
         assert_eq!(fmt(0.000123456789), "0.000123457");
-        assert_eq!(short_did("did:key:z6MkABCDEFGHIJKLmnop"), "did:key:z6Mk…mnop");
-        let l = Listed { offer: offer_from(&form(true), "0".repeat(32), NOW).unwrap(), solver: "did:key:z6MkABCDEFGHIJKLmnop".into() };
+        let did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        assert_eq!(short_did(did), "haXgBZDv…EGta2doK");
+        let l = Listed { offer: offer_from(&form(true), "0".repeat(32), NOW).unwrap(), solver: did.into() };
         let (title, detail) = describe(&l, NOW);
         assert_eq!(title, "Sells NPT · 1 NPT = 0.15 USDC");
-        assert_eq!(detail, "10–10,000 NPT · z6Mk…mnop · 30 min");
+        assert_eq!(detail, "10–10,000 NPT · haXgBZDv…EGta2doK · 30 min");
+    }
+
+    fn usdc() -> Asset {
+        asset_at(2).unwrap()
+    }
+
+    fn npt() -> Asset {
+        Asset::npt()
     }
 
     #[test]
@@ -270,13 +309,13 @@ mod tests {
         let mut board = Board::default();
         let o = offer_from(&form(true), "1".repeat(32), NOW).unwrap();
         board.ingest(&published(&o, 1), NOW, Net::Main).unwrap();
-        // The same offer again, and an older copy: still one.
+        // The same offer again, and an older copy: still one, still the newest.
         board.ingest(&published(&o, 1), NOW, Net::Main).unwrap();
         let older = Offer { expires_at: NOW + 60, ..o.clone() };
         board.ingest(&published(&older, 1), NOW, Net::Main).unwrap();
         assert_eq!(board.len(), 1);
-        assert_eq!(board.matching("USDC", "NPT", NOW)[0].offer.expires_at, o.expires_at);
-        assert!(board.matching("NPT", "USDC", NOW).is_empty(), "the other direction");
+        assert_eq!(board.matching(&usdc(), &npt(), NOW)[0].offer.expires_at, o.expires_at);
+        assert!(board.matching(&npt(), &usdc(), NOW).is_empty(), "the other direction");
         // Junk, another network and a changed body are dropped.
         assert!(board.ingest("not base64!", NOW, Net::Main).is_err());
         assert!(board.ingest(&published(&o, 1), NOW, Net::Test).is_err());
@@ -287,17 +326,56 @@ mod tests {
         // A better rate from another solver comes first.
         let cheaper = offer_from(&SolverForm { price: "0.10", ..form(true) }, "2".repeat(32), NOW).unwrap();
         board.ingest(&published(&cheaper, 3), NOW, Net::Main).unwrap();
-        assert_eq!(board.matching("USDC", "NPT", NOW)[0].offer.id, "2".repeat(32));
+        assert_eq!(board.matching(&usdc(), &npt(), NOW)[0].offer.id, "2".repeat(32));
         // Five offers per solver at most.
         for i in 0..6u8 {
             let more = Offer { id: format!("{:032x}", 100 + i), ..o.clone() };
             let _ = board.ingest(&published(&more, 4), NOW, Net::Main);
         }
-        assert_eq!(board.matching("USDC", "NPT", NOW).iter().filter(|l| l.offer.id.starts_with("0000")).count(), PER_SOLVER);
+        assert_eq!(board.matching(&usdc(), &npt(), NOW).iter().filter(|l| l.offer.id.starts_with("0000")).count(), PER_SOLVER);
         // Withdrawn, then expired: gone.
-        board.ingest(&published(&Offer { withdrawn: true, ..cheaper }, 3), NOW, Net::Main).unwrap();
-        assert!(board.matching("USDC", "NPT", NOW).iter().all(|l| l.offer.id != "2".repeat(32)));
+        board.ingest(&published(&Offer { withdrawn: true, ..cheaper.clone() }, 3), NOW, Net::Main).unwrap();
+        assert!(board.get(&DidKey::new(SigningKey::from_bytes(&[3; 32]).verifying_key()).to_string(), &"2".repeat(32)).is_none());
         board.prune(NOW + 1801);
         assert_eq!(board.len(), 0);
+    }
+
+    #[test]
+    fn a_withdrawn_offer_stays_gone_and_terms_never_change_under_an_id() {
+        let mut board = Board::default();
+        let o = offer_from(&form(true), "3".repeat(32), NOW).unwrap();
+        board.ingest(&published(&o, 5), NOW, Net::Main).unwrap();
+        board.ingest(&published(&Offer { withdrawn: true, ..o.clone() }, 5), NOW, Net::Main).unwrap();
+        // A replayed earlier copy, or a later one, does not bring it back.
+        assert!(board.ingest(&published(&o, 5), NOW + 10, Net::Main).is_err());
+        assert!(board.ingest(&published(&Offer { expires_at: NOW + 3000, ..o.clone() }, 5), NOW + 10, Net::Main).is_err());
+        assert_eq!(board.len(), 0);
+        // Same id, worse rate: refused; the listed terms stay.
+        let p = offer_from(&form(true), "4".repeat(32), NOW).unwrap();
+        board.ingest(&published(&p, 6), NOW, Net::Main).unwrap();
+        let worse = Offer { rate_want: Amount::new(300_000), expires_at: NOW + 1900, ..p.clone() };
+        assert!(board.ingest(&published(&worse, 6), NOW, Net::Main).is_err());
+        assert_eq!(board.matching(&usdc(), &npt(), NOW)[0].offer, p);
+        // Longer life with the same terms is fine.
+        board.ingest(&published(&Offer { expires_at: NOW + 1900, ..p.clone() }, 6), NOW, Net::Main).unwrap();
+        assert_eq!(board.matching(&usdc(), &npt(), NOW)[0].offer.expires_at, NOW + 1900);
+    }
+
+    #[test]
+    fn a_full_board_makes_room_and_assets_match_on_chain_too() {
+        let mut board = Board::default();
+        for seed in 0..(TOTAL as u32 / PER_SOLVER as u32) {
+            for i in 0..PER_SOLVER as u32 {
+                let o = Offer { id: format!("{:032x}", seed * 10 + i), expires_at: NOW + 600 + u64::from(seed), ..offer_from(&form(true), "0".repeat(32), NOW).unwrap() };
+                board.ingest(&published(&o, 10 + seed as u8), NOW, Net::Main).unwrap();
+            }
+        }
+        assert_eq!(board.len(), TOTAL);
+        let fresh = offer_from(&form(true), "9".repeat(32), NOW).unwrap();
+        board.ingest(&published(&fresh, 99), NOW, Net::Main).unwrap();
+        assert_eq!(board.len(), TOTAL, "the soonest-ending offer made room");
+        assert!(board.matching(&usdc(), &npt(), NOW).iter().any(|l| l.offer.id == "9".repeat(32)));
+        let other_chain = Asset { chain: intents_protocol::Chain::Bitcoin, symbol: "USDC".into() };
+        assert!(board.matching(&other_chain, &npt(), NOW).is_empty());
     }
 }

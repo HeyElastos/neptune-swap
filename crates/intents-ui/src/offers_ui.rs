@@ -20,20 +20,41 @@ const COPY_SECS: u64 = 20 * 60;
 const REPUBLISH_SECS: u32 = 10 * 60;
 const OTHERS: [&str; 3] = ["USDC", "ETH", "BTC"];
 
+/// The most offers this Home publishes at once (every reader keeps 5 per solver).
+const MINE_MAX: usize = 5;
+/// Messages read per call, and calls per poll: a flood cannot keep the list behind.
+const RECV_BATCH: usize = 50;
+const RECV_CALLS: usize = 10;
+
+/// The form filled from an offer: that offer exactly as the user saw it,
+/// and the amounts the form held then.
+struct Filled {
+    listed: offers::Listed,
+    give_text: String,
+    want_text: String,
+}
+
 #[derive(Default)]
 struct State {
     token: Option<String>,
+    /// Listening for offers: only once the user asks to see them.
+    listening: bool,
     board: Board,
     /// The topic joined, and the network it belongs to.
     joined: Option<(String, Net)>,
-    /// The rows shown: (solver, offer id) in order.
-    shown: Vec<(String, String)>,
+    /// The rows shown, exactly as shown.
+    shown: Vec<offers::Listed>,
+    filled: Option<Filled>,
     /// This Home's live offers.
     mine: Vec<Offer>,
     did: String,
 }
 
 type Shared = Rc<RefCell<State>>;
+
+thread_local! {
+    static STATE: RefCell<Option<Shared>> = const { RefCell::new(None) };
+}
 
 fn net_of(network_id: &str) -> (Net, &'static str) {
     if network_id == "neptune-main" {
@@ -61,6 +82,7 @@ pub fn to_text(units: u128, d: &AssetDef) -> String {
 
 pub fn wire(app: &AppWindow, token: Option<String>) {
     let state: Shared = Rc::new(RefCell::new(State { token: token.clone(), ..Default::default() }));
+    STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
     {
         let (weak, state) = (app.as_weak(), state.clone());
         app.on_take_offer(move |row| take(&weak.unwrap(), &state, row as usize));
@@ -73,12 +95,61 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
         let (weak, state) = (app.as_weak(), state.clone());
         app.on_withdraw_offer(move |row| spawn(withdraw(weak.clone(), state.clone(), row as usize)));
     }
+    {
+        let (weak, state) = (app.as_weak(), state.clone());
+        app.on_show_offers(move || {
+            if state.borrow().listening {
+                return;
+            }
+            state.borrow_mut().listening = true;
+            let app = weak.unwrap();
+            app.set_offers_on(true);
+            app.set_offers_status("Listening for offers on the carrier…".into());
+            spawn(listen(weak.clone(), state.clone()));
+        });
+    }
     if token.is_some() {
-        app.set_offers_status("Listening for offers on the carrier…".into());
-        spawn(listen(app.as_weak(), state.clone()));
+        app.set_offers_status("Solvers' standing offers for this pair. Showing them joins the public offers topic on the carrier.".into());
         spawn(republish(app.as_weak(), state));
     } else {
         app.set_offers_status("Open Neptune Swap from Home to see offers.".into());
+    }
+}
+
+/// The swap form changed: a form filled from an offer follows the offer's
+/// rate when the amount given changes, and stops following it when the
+/// amount asked is edited by hand.
+pub fn form_changed(app: &AppWindow) {
+    let Some(state) = STATE.with(|s| s.borrow().clone()) else { return };
+    let mut s = state.borrow_mut();
+    let Some(filled) = s.filled.as_mut() else { return };
+    let (give_text, want_text) = (app.get_give_amount().to_string(), app.get_want_amount().to_string());
+    if give_text == filled.give_text && want_text == filled.want_text {
+        return;
+    }
+    let offer = filled.listed.offer.clone();
+    let (Some(pay_i), Some(get_i)) = (def_index(&offer.want.symbol), def_index(&offer.give.symbol)) else { return };
+    let same_pair = app.get_give_index() as usize == pay_i && app.get_want_index() as usize == get_i;
+    if !same_pair || want_text != filled.want_text {
+        s.filled = None;
+        drop(s);
+        app.set_offers_status("The form no longer follows an offer.".into());
+        return;
+    }
+    let paid = Amount::parse_decimal(&give_text, ASSETS[pay_i].decimals, ASSETS[pay_i].unit).ok();
+    match paid.and_then(|p| offer.amount_for(p)) {
+        Some(get) => {
+            let text = to_text(get.units(), &ASSETS[get_i]);
+            filled.give_text = give_text;
+            filled.want_text = text.clone();
+            drop(s);
+            app.set_want_amount(text.into());
+        }
+        None => {
+            filled.give_text = give_text;
+            drop(s);
+            app.set_offers_status("That amount is outside this offer's limits.".into());
+        }
     }
 }
 
@@ -110,28 +181,44 @@ async fn listen(weak: Weak<AppWindow>, state: Shared) {
 
 async fn hear(state: &Shared, net: Net, topic: &str) -> Result<(), String> {
     let token = state.borrow().token.clone().unwrap_or_default();
-    let joined = state.borrow().joined.as_ref().is_some_and(|(t, _)| t == topic);
-    if !joined {
-        match runtime::peer("gossip_join", &json!({ "topic": topic }), &token).await {
-            Ok(_) => {}
-            Err(e) if e.code == "already_joined" || e.message.contains("already") => {}
-            Err(e) => return Err(e.message),
+    let joined = state.borrow().joined.clone();
+    if joined.as_ref().map(|(t, _)| t.as_str()) != Some(topic) {
+        // Another network: leave its topic first.
+        if let Some((old, _)) = joined {
+            let _ = runtime::peer("gossip_leave", &json!({ "topic": old }), &token).await;
         }
+        join(topic, &token).await?;
         let mut s = state.borrow_mut();
         s.joined = Some((topic.to_string(), net));
         s.board = Board::default();
     }
-    let reply = runtime::peer("gossip_recv", &json!({ "topic": topic, "limit": 50 }), &token).await.map_err(|e| e.message)?;
-    let now = runtime::now_secs();
-    let mut s = state.borrow_mut();
-    for m in reply["messages"].as_array().into_iter().flatten() {
-        if let Some(content) = m["content"].as_str() {
-            // Anything that does not verify is dropped unread.
-            let _ = s.board.ingest(content, now, net);
+    for _ in 0..RECV_CALLS {
+        let reply = runtime::peer("gossip_recv", &json!({ "topic": topic, "limit": RECV_BATCH }), &token)
+            .await
+            .map_err(|e| e.message)?;
+        let messages = reply["messages"].as_array().cloned().unwrap_or_default();
+        let now = runtime::now_secs();
+        let mut s = state.borrow_mut();
+        for m in &messages {
+            if let Some(content) = m["content"].as_str() {
+                // Anything that does not verify is dropped unread.
+                let _ = s.board.ingest(content, now, net);
+            }
+        }
+        s.board.prune(now);
+        if messages.len() < RECV_BATCH {
+            break;
         }
     }
-    s.board.prune(now);
     Ok(())
+}
+
+async fn join(topic: &str, token: &str) -> Result<(), String> {
+    match runtime::peer("gossip_join", &json!({ "topic": topic }), token).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.code == "already_joined" || e.message.contains("already") => Ok(()),
+        Err(e) => Err(e.message),
+    }
 }
 
 /// The rows for the form's pair.
@@ -140,19 +227,21 @@ fn show(app: &AppWindow, state: &Shared) {
     let (give, want) = (symbol(app.get_give_index()), symbol(app.get_want_index()));
     let now = runtime::now_secs();
     let mut s = state.borrow_mut();
-    let listed = s.board.matching(give, want, now);
-    let rows: Vec<AddressRow> = listed
+    let shown: Vec<offers::Listed> = match (offers::asset_at(app.get_give_index() as usize), offers::asset_at(app.get_want_index() as usize)) {
+        (Some(g), Some(w)) => s.board.matching(&g, &w, now).into_iter().cloned().collect(),
+        _ => vec![],
+    };
+    let rows: Vec<AddressRow> = shown
         .iter()
         .map(|l| {
             let (title, detail) = offers::describe(l, now);
             AddressRow { title: title.into(), detail: detail.into(), current: false }
         })
         .collect();
-    let shown = listed.iter().map(|l| (l.solver.clone(), l.offer.id.clone())).collect();
-    drop(listed);
     s.shown = shown;
+    let following = s.filled.is_some();
     app.set_offers_pair(format!("{give} → {want}").into());
-    if s.joined.is_some() {
+    if s.joined.is_some() && !following {
         app.set_offers_status(if rows.is_empty() {
             format!("No open offers for {give} → {want} right now.").into()
         } else {
@@ -165,28 +254,37 @@ fn show(app: &AppWindow, state: &Shared) {
 /// Fills the swap form from an offer: the user's side and the most the rate
 /// gives for the amount entered (or the offer's least, if that is outside).
 fn take(app: &AppWindow, state: &Shared, row: usize) {
-    let s = state.borrow();
-    let Some((solver, id)) = s.shown.get(row).cloned() else { return };
-    let symbol = |i: i32| ASSETS.get(i as usize).map_or("", |a| a.symbol);
-    let (give, want) = (symbol(app.get_give_index()), symbol(app.get_want_index()));
-    let Some(l) = s.board.matching(give, want, runtime::now_secs()).into_iter().find(|l| l.solver == solver && l.offer.id == id)
-    else {
+    let mut s = state.borrow_mut();
+    let Some(seen) = s.shown.get(row).cloned() else { return };
+    // Exactly the offer the row showed, and only while it is still listed so.
+    let still = s.board.get(&seen.solver, &seen.offer.id).is_some_and(|now| Offer { expires_at: seen.offer.expires_at, ..now.offer.clone() } == seen.offer);
+    if !still {
+        drop(s);
+        app.set_offers_status("That offer has ended.".into());
         return;
-    };
-    let (Some(pay_i), Some(get_i)) = (def_index(&l.offer.want.symbol), def_index(&l.offer.give.symbol)) else { return };
+    }
+    let o = &seen.offer;
+    let (Some(pay_i), Some(get_i)) = (def_index(&o.want.symbol), def_index(&o.give.symbol)) else { return };
     let (pay_def, get_def) = (&ASSETS[pay_i], &ASSETS[get_i]);
     let typed = Amount::parse_decimal(&app.get_give_amount(), pay_def.decimals, pay_def.unit).ok();
-    let pay = typed.filter(|p| l.offer.amount_for(*p).is_some()).or_else(|| l.offer.price_of(l.offer.min_give));
-    let Some(pay) = pay else { return };
-    let Some(get) = l.offer.amount_for(pay) else { return };
-    let solver = offers::short_did(&l.solver);
+    // What the user pays, on the form's own steps (rounded up to one).
+    let least = o.price_of(o.min_give).map(|p| Amount::new(p.units().div_ceil(pay_def.unit) * pay_def.unit));
+    let pay = typed.filter(|p| o.amount_for(*p).is_some()).or(least);
+    let Some((pay, get)) = pay.and_then(|p| Some((p, o.amount_for(p)?))) else {
+        drop(s);
+        app.set_offers_status("This offer's limits are too narrow to fill from here.".into());
+        return;
+    };
+    let solver = offers::short_did(&seen.solver);
+    let (give_text, want_text) = (to_text(pay.units(), pay_def), to_text(get.units(), get_def));
+    s.filled = Some(Filled { listed: seen, give_text: give_text.clone(), want_text: want_text.clone() });
     drop(s);
     app.set_give_index(pay_i as i32);
     app.set_want_index(get_i as i32);
-    app.set_give_amount(to_text(pay.units(), pay_def).into());
-    app.set_want_amount(to_text(get.units(), get_def).into());
+    app.set_give_amount(give_text.into());
+    app.set_want_amount(want_text.into());
     app.set_form_error(SharedString::new());
-    app.set_offers_status(format!("Filled from {solver}'s offer. Review it, then it goes sealed to that solver.").into());
+    app.set_offers_status(format!("Filled from solver {solver}'s offer, at its rate.").into());
 }
 
 async fn load_identity(weak: Weak<AppWindow>, state: Shared) {
@@ -220,11 +318,7 @@ async fn send(state: &Shared, network_id: &str, offer: &Offer) -> Result<(), Str
     let signed = runtime::provider("offer_sign", &json!({ "network": network_id, "offer": offer }), &token).await.map_err(|e| e.message)?;
     let topic = signed["topic"].as_str().ok_or("no topic")?.to_string();
     let message = signed["message"].as_str().ok_or("no signature")?.to_string();
-    match runtime::peer("gossip_join", &json!({ "topic": topic }), &token).await {
-        Ok(_) => {}
-        Err(e) if e.code == "already_joined" || e.message.contains("already") => {}
-        Err(e) => return Err(e.message),
-    }
+    join(&topic, &token).await?;
     runtime::peer("gossip_send", &json!({ "topic": topic, "message": message }), &token).await.map_err(|e| e.message)?;
     Ok(())
 }
@@ -244,6 +338,9 @@ async fn publish(weak: Weak<AppWindow>, state: Shared) {
         max_npt: &max,
         ttl_secs: COPY_SECS,
     };
+    if state.borrow().mine.len() >= MINE_MAX {
+        return app.set_solver_error(format!("At most {MINE_MAX} offers at a time: withdraw one first.").into());
+    }
     let offer = match offers::offer_from(&form, crate::intent::random_id(), runtime::now_secs()) {
         Ok(offer) => offer,
         Err(message) => return app.set_solver_error(message.into()),
@@ -344,6 +441,7 @@ pub fn demo(app: &AppWindow, state: &str) {
         sample(true, "USDC", "0.152", "100", "2500", "did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG"),
         sample(true, "USDC", "0.158", "1", "500", "did:key:z6MknGc3ocHs3zdPiJbnaaqDi58NGb4pk1Sp9WxWufuXSdxf"),
     ];
+    app.set_offers_on(true);
     app.set_offers_pair("USDC → NPT".into());
     app.set_offers_status("Tap one to fill the form from it.".into());
     app.set_offer_rows(ModelRc::new(VecModel::from(listed.iter().map(|l| row(l, false)).collect::<Vec<_>>())));

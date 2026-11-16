@@ -64,6 +64,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
             let app = weak.unwrap();
             show_usd(&app, prices.borrow().as_ref());
             show_other_leg(&app, account.borrow().as_deref());
+            offers_ui::form_changed(&app);
         });
     }
     {
