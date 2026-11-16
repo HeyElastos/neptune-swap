@@ -153,12 +153,14 @@ impl Wallets {
         let start = wallet.state().sync.map_or(0, |s| s.height + 1);
         let end = tip.min(start.saturating_add(SYNC_STEP - 1));
         let (mut received, mut spent) = (0, 0);
+        let mut proofs_dropped = None;
         let mut from = start;
         while from <= end {
             let to = end.min(from + BATCH - 1);
             let report = wallet.apply_blocks(blocks(node, from, to)?)?;
             received += report.received;
             spent += report.spent;
+            proofs_dropped = report.proofs_dropped.or(proofs_dropped);
             from = to + 1;
         }
         self.save_state(network_id, &wallet)?;
@@ -183,6 +185,7 @@ impl Wallets {
         Ok(json!({
             "synced_height": height, "tip": tip, "received": received, "spent": spent,
             "done": done, "verified_height": verified_height, "verifiable": verifiable,
+            "own_proofs": wallet.state().mutator_set.is_some(), "proofs_dropped": proofs_dropped,
         }))
     }
 
