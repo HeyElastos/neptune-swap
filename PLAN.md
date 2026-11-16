@@ -83,9 +83,9 @@ diff on branch `neptune-dev` in `the elastOS runtime checkout` and are saved in
 `patches/elastos-runtime-v2.0.1-neptune.patch` (regenerate with `git diff` there).
 
 First, tomorrow:
-1. **Run the tests** over the last commits (they were still building at pause time):
-   `CARGO_NET_OFFLINE=true cargo test --release -p light-core -p neptune-provider -p intents-protocol -p intents-ui`,
-   and in the runtime fork `cargo test --release -p elastos-server neptune_swap`.
+1. **Run the fork's tests**: in the runtime fork `cargo test --release -p elastos-server neptune_swap`
+   (still building at pause time). This repo's tests passed over 03177b6: protocol 26, app 26,
+   light-core 23, provider 17.
 2. **Rebuild and restart the dev Home**: `cargo build --release -p elastos-server --bin elastos`
    in the fork, `scripts/build-intents-capsule.sh`, `scripts/install-dev-home.sh`, then
    `scripts/dev-home.sh` (the dev Home was stopped by the rebuild, exit 75).
