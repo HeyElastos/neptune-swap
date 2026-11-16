@@ -104,10 +104,99 @@ mod web {
     pub fn now_secs() -> u64 {
         (js_sys::Date::now() / 1000.0) as u64
     }
+
+    /// Home's clipboard bridge (`home:clipboard-*`, schema v1). Home sends `ready` with the
+    /// frame's generation; a write request names a purpose Home's policy allows for this app.
+    mod clipboard {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+
+        use js_sys::{Object, Reflect};
+        use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+
+        type Done = Box<dyn FnOnce(Result<(), String>)>;
+
+        #[derive(Default)]
+        struct State {
+            parent_origin: Option<String>,
+            generation: Option<String>,
+            pending: HashMap<String, Done>,
+            listening: bool,
+        }
+
+        thread_local! { static STATE: RefCell<State> = RefCell::default(); }
+
+        fn get(v: &JsValue, key: &str) -> Option<String> {
+            Reflect::get(v, &key.into()).ok()?.as_string()
+        }
+
+        /// Starts listening for Home's clipboard messages; call once, early.
+        pub fn listen() {
+            if STATE.with(|s| std::mem::replace(&mut s.borrow_mut().listening, true)) {
+                return;
+            }
+            let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(|event: web_sys::MessageEvent| {
+                let data = event.data();
+                match get(&data, "type").as_deref() {
+                    Some("home:clipboard-ready") => STATE.with(|s| {
+                        let mut s = s.borrow_mut();
+                        s.parent_origin = get(&data, "parentOrigin");
+                        s.generation = get(&data, "generation");
+                    }),
+                    Some("home:clipboard-result") => {
+                        let Some(id) = get(&data, "requestId") else { return };
+                        let ok = Reflect::get(&data, &"ok".into()).ok().and_then(|v| v.as_bool()) == Some(true);
+                        let done = STATE.with(|s| s.borrow_mut().pending.remove(&id));
+                        if let Some(done) = done {
+                            done(if ok { Ok(()) } else { Err(get(&data, "error").unwrap_or_else(|| "denied".into())) });
+                        }
+                    }
+                    _ => {}
+                }
+            });
+            let _ = super::window().add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref());
+            on_message.forget();
+        }
+
+        pub fn write(token: &str, purpose: &str, text: &str, done: Done) {
+            let (origin, generation) = STATE.with(|s| {
+                let s = s.borrow();
+                (s.parent_origin.clone(), s.generation.clone())
+            });
+            let (Some(origin), Some(generation)) = (origin, generation) else {
+                done(Err("unavailable".into()));
+                return;
+            };
+            let Ok(Some(parent)) = super::window().parent() else {
+                done(Err("unavailable".into()));
+                return;
+            };
+            let id = super::window().crypto().map(|c| c.random_uuid()).unwrap_or_default();
+            let message = Object::new();
+            for (key, value) in [
+                ("type", "home:clipboard-request"),
+                ("schema", "elastos.home.clipboard.request/v1"),
+                ("requestId", id.as_str()),
+                ("homeToken", token),
+                ("parentOrigin", origin.as_str()),
+                ("generation", generation.as_str()),
+                ("operation", "write"),
+                ("purpose", purpose),
+                ("mime_type", "text/plain"),
+                ("text", text),
+            ] {
+                let _ = Reflect::set(&message, &key.into(), &value.into());
+            }
+            STATE.with(|s| s.borrow_mut().pending.insert(id, done));
+            let _ = parent.post_message(&message, "*");
+        }
+    }
+
+    pub use clipboard::{listen as listen_clipboard, write as copy_text};
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{announce, home_token, now_secs, provider, query};
+pub use web::{announce, copy_text, home_token, listen_clipboard, now_secs, provider, query};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn home_token() -> Option<String> {
@@ -121,6 +210,14 @@ pub fn query(name: &str) -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn announce(_token: &str) {}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn listen_clipboard() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn copy_text(_token: &str, _purpose: &str, _text: &str, done: Box<dyn FnOnce(Result<(), String>)>) {
+    done(Err("unavailable".into()));
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn now_secs() -> u64 {

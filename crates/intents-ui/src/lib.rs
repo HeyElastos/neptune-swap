@@ -5,6 +5,7 @@
 mod backdrop;
 mod intent;
 mod runtime;
+mod wallet_ui;
 
 use std::rc::Rc;
 
@@ -62,6 +63,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         app.on_refresh(move || spawn(load_status(weak.clone(), token.clone())));
     }
 
+    wallet_ui::wire(&app, token.clone());
     demo(&app);
     match token {
         Some(token) => {
@@ -176,7 +178,7 @@ async fn load_status(weak: Weak<AppWindow>, token: Option<String>) {
     }
 }
 
-fn group_thousands(n: u64) -> String {
+pub(crate) fn group_thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
@@ -197,6 +199,10 @@ fn demo(app: &AppWindow) {
         _ => {}
     }
     let Some(state) = runtime::query("demo") else { return };
+    if state.starts_with("wallet") {
+        wallet_ui::demo(app, &state);
+        return;
+    }
     app.set_give_amount("250".into());
     app.set_want_amount("1.5".into());
     if state == "review" {

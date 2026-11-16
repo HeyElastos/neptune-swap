@@ -181,6 +181,195 @@ component Leg inherits Rectangle {
     }
 }
 
+// Three seed words on one line of the backup sheet.
+export struct WordRow {
+    a: string,
+    b: string,
+    c: string,
+}
+
+// A labelled text well, one line or several (a seed phrase).
+component Field inherits Rectangle {
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> multi;
+    in-out property <string> text;
+    border-radius: Rad.ctrl;
+    background: Skin.on-glass;
+    border-width: input.has-focus ? 2px : 0px;
+    border-color: Skin.accent;
+    height: column.preferred-height;
+    column := VerticalLayout {
+        padding: Sp.m;
+        spacing: Sp.xs;
+        Text { text: root.label; color: Skin.muted; font-size: Ty.caption; }
+        Rectangle {
+            height: root.multi ? 72px : 24px;
+            input := TextInput {
+                text <=> root.text;
+                color: Skin.ink;
+                font-size: Ty.body;
+                single-line: !root.multi;
+                wrap: root.multi ? word-wrap : no-wrap;
+                selection-background-color: Skin.accent.with-alpha(0.35);
+            }
+            if root.text == "": Text {
+                text: root.placeholder;
+                color: Skin.faint;
+                font-size: Ty.body;
+                vertical-alignment: top;
+                horizontal-alignment: left;
+            }
+        }
+    }
+}
+
+// The Neptune wallet. The seed lives with this Home's Neptune provider; the page shows the
+// phrase once, when it is made, and sends a typed one once, to import it.
+component WalletCard inherits VerticalLayout {
+    // "loading", "none", "phrase", "import" or "ready".
+    in property <string> state;
+    in property <bool> busy;
+    in property <string> error;
+    in property <[WordRow]> phrase-rows;
+    in property <string> balance;
+    in property <string> spendable;
+    in property <string> sync-label;
+    in property <string> address-short;
+    in property <string> copy-note;
+    in-out property <string> import-phrase;
+    in-out property <string> import-height;
+    callback create();
+    callback start-import();
+    callback cancel-import();
+    callback import();
+    callback phrase-done();
+    callback sync();
+    callback copy-address();
+    padding: Sp.l;
+    spacing: Sp.m;
+    // Every element is a direct child, shown by state: wrapped text inside a nested layout
+    // would be measured as one line and the card would clip.
+    if root.state == "loading": Text { text: "Opening the wallet…"; color: Skin.muted; font-size: Ty.small; }
+
+    // No wallet yet.
+    if root.state == "none": Text { text: "Your Neptune wallet"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
+    if root.state == "none": Text {
+        text: "No wallet on this Home yet. Its seed stays with this Home's Neptune provider; this page never stores it.";
+        color: Skin.muted;
+        font-size: Ty.small;
+        wrap: word-wrap;
+    }
+    if root.state == "none": HorizontalLayout {
+        spacing: Sp.s;
+        alignment: start;
+        Button { text: "Create wallet"; enabled: !root.busy; clicked => { root.create(); } }
+        Button { text: "Import seed"; primary: false; enabled: !root.busy; clicked => { root.start-import(); } }
+    }
+
+    // The new seed, shown once.
+    if root.state == "phrase": Text { text: "Write down your seed"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
+    if root.state == "phrase": Text {
+        text: "These 18 words are the only way to restore this wallet, and anyone who has them can spend it. Write them on paper and keep them offline. They are not shown again.";
+        color: Skin.muted;
+        font-size: Ty.small;
+        wrap: word-wrap;
+    }
+    if root.state == "phrase": Rectangle {
+        border-radius: Rad.ctrl;
+        background: Skin.on-glass;
+        height: words.preferred-height;
+        words := VerticalLayout {
+            padding: Sp.m;
+            spacing: Sp.xs;
+            for row in root.phrase-rows: HorizontalLayout {
+                spacing: Sp.m;
+                for word in [row.a, row.b, row.c]: Text {
+                    // Equal columns, whatever the words' widths.
+                    min-width: 0px;
+                    preferred-width: 0px;
+                    horizontal-stretch: 1;
+                    horizontal-alignment: left;
+                    text: word;
+                    color: Skin.ink;
+                    font-size: Ty.body;
+                    font-weight: Ty.label;
+                }
+            }
+        }
+    }
+    if root.state == "phrase": HorizontalLayout {
+        alignment: end;
+        Button { text: "I wrote it down"; clicked => { root.phrase-done(); } }
+    }
+
+    // Import.
+    if root.state == "import": Text { text: "Import a seed"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
+    if root.state == "import": Field {
+        label: "Seed phrase";
+        placeholder: "18 words, separated by spaces";
+        multi: true;
+        text <=> root.import-phrase;
+    }
+    if root.state == "import": Field {
+        label: "Scan from block";
+        placeholder: "0 scans from the first block";
+        text <=> root.import-height;
+    }
+    if root.state == "import": HorizontalLayout {
+        alignment: end;
+        spacing: Sp.s;
+        Button { text: "Cancel"; primary: false; enabled: !root.busy; clicked => { root.cancel-import(); } }
+        Button { text: root.busy ? "Importing…" : "Import"; enabled: !root.busy; clicked => { root.import(); } }
+    }
+
+    // The wallet.
+    if root.state == "ready": Text { text: "Balance"; color: Skin.muted; font-size: Ty.caption; }
+    if root.state == "ready": Text { text: root.balance + " NPT"; color: Skin.ink; font-size: Ty.display; font-weight: Ty.strong; }
+    if root.state == "ready" && root.spendable != "": Text { text: root.spendable; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+    if root.state == "ready": HorizontalLayout {
+        spacing: Sp.m;
+        Text {
+            text: root.sync-label;
+            color: Skin.muted;
+            font-size: Ty.small;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Button { text: root.busy ? "Syncing…" : "Sync"; primary: false; enabled: !root.busy; clicked => { root.sync(); } }
+    }
+    if root.state == "ready": Rectangle {
+        border-radius: Rad.ctrl;
+        background: Skin.on-glass;
+        height: receive.preferred-height;
+        receive := VerticalLayout {
+            padding: Sp.m;
+            spacing: Sp.xs;
+            Text { text: "Receive at"; color: Skin.muted; font-size: Ty.caption; }
+            Text { text: root.address-short; color: Skin.ink; font-size: Ty.small; }
+            HorizontalLayout {
+                spacing: Sp.m;
+                padding-top: Sp.xs;
+                Text {
+                    text: root.copy-note;
+                    color: Skin.muted;
+                    font-size: Ty.caption;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Button { text: "Copy address"; primary: false; clicked => { root.copy-address(); } }
+            }
+        }
+    }
+
+    if root.error != "": Text {
+        text: root.error;
+        color: Skin.danger;
+        font-size: Ty.small;
+        wrap: word-wrap;
+    }
+}
+
 // A row in a popover list.
 component Row inherits Pressable {
     in property <string> title;
@@ -256,6 +445,31 @@ export component AppWindow inherits Window {
     in property <string> sum-until;
     in property <string> review-json;
     property <bool> show-json;
+
+    // 0: the swap, 1: the wallet.
+    in-out property <int> page;
+    callback page-changed(int);
+    changed page => { root.page-changed(self.page); }
+
+    // The wallet card (see WalletCard).
+    in property <string> wallet-state: "loading";
+    in property <bool> wallet-busy;
+    in property <string> wallet-error;
+    in property <[WordRow]> wallet-phrase-rows;
+    in property <string> wallet-balance;
+    in property <string> wallet-spendable;
+    in property <string> wallet-sync-label;
+    in property <string> wallet-address-short;
+    in property <string> wallet-copy-note;
+    in-out property <string> wallet-import-phrase;
+    in-out property <string> wallet-import-height;
+    callback wallet-create();
+    callback wallet-start-import();
+    callback wallet-cancel-import();
+    callback wallet-import();
+    callback wallet-phrase-done();
+    callback wallet-sync();
+    callback wallet-copy-address();
 
     // Which popover is open: "", "node", "give" or "want".
     in-out property <string> popover;
@@ -426,13 +640,50 @@ export component AppWindow inherits Window {
                         }
                     }
                     Text {
-                        text: "Say what you want. Solvers compete in private, and the Neptune leg settles where nobody can see it.";
+                        text: root.page == 0
+                            ? "Say what you want. Solvers compete in private, and the Neptune leg settles where nobody can see it."
+                            : "Your NPT, held by this Home's Neptune provider.";
                         color: Skin.ink;
                         font-size: Ty.small;
                         wrap: word-wrap;
                     }
+                    HorizontalLayout {
+                        alignment: start;
+                        Segmented {
+                            options: ["Swap", "Wallet"];
+                            selected <=> root.page;
+                        }
+                    }
+                    if root.page == 1: Glass {
+                        height: wallet-card.preferred-height;
+                        wallet-card := WalletCard {
+                            // Known width, so wrapped lines count in its height.
+                            width: parent.width;
+                            state: root.wallet-state;
+                            busy: root.wallet-busy;
+                            error: root.wallet-error;
+                            phrase-rows: root.wallet-phrase-rows;
+                            balance: root.wallet-balance;
+                            spendable: root.wallet-spendable;
+                            sync-label: root.wallet-sync-label;
+                            address-short: root.wallet-address-short;
+                            copy-note: root.wallet-copy-note;
+                            import-phrase <=> root.wallet-import-phrase;
+                            import-height <=> root.wallet-import-height;
+                            create => { root.wallet-create(); }
+                            start-import => { root.wallet-start-import(); }
+                            cancel-import => { root.wallet-cancel-import(); }
+                            import => { root.wallet-import(); }
+                            phrase-done => { root.wallet-phrase-done(); }
+                            sync => { root.wallet-sync(); }
+                            copy-address => { root.wallet-copy-address(); }
+                        }
+                    }
                     Glass {
-                        height: card.preferred-height;
+                        // The swap keeps its place in the tree (its legs anchor popovers) and
+                        // folds away on the wallet page.
+                        visible: root.page == 0;
+                        height: root.page == 0 ? card.preferred-height : 0px;
                         card := VerticalLayout {
                             padding: Sp.l;
                             spacing: Sp.m;
