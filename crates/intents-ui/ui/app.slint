@@ -1,4 +1,4 @@
-// Neptune Intents. Hyper's tiers: the node is glanced at (a chip and its popover), the swap is
+// Neptune Intents. Hyper's tiers: the node is glanced at (a chip and its panel), the swap is
 // the main area, the review is a sheet. Everything floats as frosted glass over the wallpaper.
 
 import { Skin, Look, Sp, Rad, Ty, Ctl, Motion } from "tokens.slint";
@@ -387,6 +387,44 @@ export component AppWindow inherits Window {
                     max-width: 560px;
                     padding-top: Sp.s;
                     spacing: Sp.l;
+                    // The node's details open here, under its chip, and push the page down: a
+                    // floating popover would cover the intro text.
+                    if root.popover == "node": Glass {
+                        radius: Rad.ctrl;
+                        floating: false;
+                        height: node-list.preferred-height;
+                        node-list := VerticalLayout {
+                            padding: Sp.s;
+                            // Text lines up with the rows' titles.
+                            VerticalLayout {
+                                padding-left: Sp.m;
+                                padding-right: Sp.m;
+                                padding-bottom: Sp.s;
+                                Text {
+                                    text: "Neptune node";
+                                    color: Skin.muted;
+                                    font-size: Ty.caption;
+                                    height: 28px;
+                                    vertical-alignment: center;
+                                }
+                                if root.node-detail != "": Text {
+                                    text: root.node-detail;
+                                    color: Skin.ink;
+                                    font-size: Ty.small;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            for network[i] in root.networks: Row {
+                                title: network;
+                                chosen: i == root.network-index;
+                                clicked => { root.popover = ""; root.pick-network(i); }
+                            }
+                            if root.networks.length > 0: Row {
+                                title: "Check again";
+                                clicked => { root.popover = ""; root.refresh(); }
+                            }
+                        }
+                    }
                     Text {
                         text: "Say what you want. Solvers compete in private, and the Neptune leg settles where nobody can see it.";
                         color: Skin.ink;
@@ -468,45 +506,10 @@ export component AppWindow inherits Window {
             Rectangle { vertical-stretch: 1; }
         }
 
-        // A click outside an open popover closes it.
-        if root.popover != "": TouchArea {
+        // A click outside an open asset popover closes it. The node panel is part of the layout
+        // and closes from its chip or Escape.
+        if root.popover == "give" || root.popover == "want": TouchArea {
             clicked => { root.popover = ""; }
-        }
-
-        Popover {
-            open: root.popover == "node";
-            anchor-y: root.pop-top;
-            width: 280px;
-            x: max(Sp.s, root.pop-right - self.width);
-            height: node-list.preferred-height;
-            node-list := VerticalLayout {
-                padding: 6px;
-                Text {
-                    text: "Neptune node";
-                    color: Skin.muted;
-                    font-size: Ty.caption;
-                    height: 28px;
-                    vertical-alignment: center;
-                    x: Sp.m;
-                }
-                if root.node-detail != "": Text {
-                    text: root.node-detail;
-                    color: Skin.ink;
-                    font-size: Ty.small;
-                    wrap: word-wrap;
-                    x: Sp.m;
-                    width: parent.width - 2 * Sp.m;
-                }
-                for network[i] in root.networks: Row {
-                    title: network;
-                    chosen: i == root.network-index;
-                    clicked => { root.popover = ""; root.pick-network(i); }
-                }
-                if root.networks.length > 0: Row {
-                    title: "Check again";
-                    clicked => { root.popover = ""; root.refresh(); }
-                }
-            }
         }
 
         Popover {
