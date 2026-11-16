@@ -16,6 +16,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use light_core::history::AddressKind;
 use light_core::{rpc, LightWallet, WalletState};
 use light_core::neptune_primitives::network::Network;
 use serde_json::{json, Value};
@@ -150,10 +151,35 @@ impl Wallets {
         )?;
         let (details, built) = wallet.build_payment(to, &plan, snapshot, now_ms)?;
         prove_and_submit(&details, node)?;
-        // The change key index moved on; the spent coins show as spent once
-        // a block includes the transaction.
+        // The change key index moved on; the payment shows as pending until a
+        // block includes it and its coins show as spent.
+        wallet.record_pending(&plan, now_ms);
         self.save_state(network_id, &wallet)?;
         Ok(json!({ "sent": amount.trim(), "fee": fee.trim(), "inputs": built.inputs, "change": built.change }))
+    }
+
+    /// The address handed out for each kind.
+    pub fn addresses(&self, network_id: &str, network: Network) -> Result<Value> {
+        let wallet = self.load(network_id, network)?.context("no wallet")?;
+        Ok(json!({
+            "generation": wallet.current_address(AddressKind::Generation)?,
+            "ec_hybrid": wallet.current_address(AddressKind::EcHybrid)?,
+        }))
+    }
+
+    /// A fresh address of `kind` ("generation" or "ec_hybrid"); earlier ones keep receiving.
+    pub fn new_address(&self, network_id: &str, network: Network, kind: &str) -> Result<Value> {
+        let kind = AddressKind::parse(kind)?;
+        let mut wallet = self.load(network_id, network)?.context("no wallet")?;
+        let issued = wallet.new_address(kind)?;
+        self.save_state(network_id, &wallet)?;
+        Ok(json!({ "kind": kind, "index": issued.index, "address": issued.address }))
+    }
+
+    /// Every payment, newest first, pending ones included.
+    pub fn history(&self, network_id: &str, network: Network) -> Result<Value> {
+        let wallet = self.load(network_id, network)?.context("no wallet")?;
+        Ok(json!({ "items": wallet.history() }))
     }
 
     pub fn balance(&self, network_id: &str, network: Network, now_ms: u64) -> Result<Value> {
@@ -332,6 +358,31 @@ mod tests {
         assert!(bad.unwrap_err().to_string().contains("claim lock"));
         assert!(wallets.htlc_secret("neptune-main", "nope").is_err());
         assert!(wallets.htlc_status("neptune-main", None, None, 0, &node).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn addresses_rotate_and_history_starts_empty() {
+        let root = temp_root();
+        let wallets = Wallets::new(Some(root.clone()));
+        let node = FixtureNode::new();
+        let created = wallets.create("neptune-main", Network::Main, &node).unwrap();
+
+        let addresses = wallets.addresses("neptune-main", Network::Main).unwrap();
+        assert_eq!(addresses["generation"]["address"], created["address"]);
+        assert_eq!(addresses["generation"]["index"], 0);
+        let short = addresses["ec_hybrid"]["address"].as_str().unwrap().to_string();
+        assert!(short.len() < created["address"].as_str().unwrap().len());
+
+        let fresh = wallets.new_address("neptune-main", Network::Main, "generation").unwrap();
+        assert_eq!(fresh["index"], 1);
+        assert_ne!(fresh["address"], created["address"]);
+        // Kept across loads, and the status shows the new one.
+        assert_eq!(wallets.addresses("neptune-main", Network::Main).unwrap()["generation"]["index"], 1);
+        assert_eq!(wallets.status("neptune-main", Network::Main).unwrap()["address"], fresh["address"]);
+        assert!(wallets.new_address("neptune-main", Network::Main, "taproot").is_err());
+
+        assert_eq!(wallets.history("neptune-main", Network::Main).unwrap()["items"], json!([]));
         fs::remove_dir_all(root).unwrap();
     }
 }

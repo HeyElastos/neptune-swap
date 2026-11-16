@@ -209,3 +209,76 @@ fn amounts_drop_trailing_zeros() {
     assert_eq!(npt(NativeCurrencyAmount::coins_from_str("14.95").unwrap()), "14.95");
     assert_eq!(npt(NativeCurrencyAmount::coins(0)), "0");
 }
+
+#[test]
+fn history_shows_receipts_and_payments_without_change() {
+    let genesis = Block::genesis(NETWORK);
+    let mut w = wallet_at(&genesis);
+    let entropy = WalletEntropy::from_phrase(PHRASE.split_whitespace()).unwrap();
+    let (mine, note) = payment(&entropy.nth_generation_spending_key(0).into(), 7);
+    let b1 = block_after(&genesis, vec![mine], vec![], vec![note]);
+    w.apply_blocks(vec![rpc(&b1)]).unwrap();
+
+    // A payment of 2 (fee included): the 7 is spent, 5 comes back as change.
+    let coin = w.state().coins[0].clone();
+    let spend = RemovalRecord { absolute_indices: index_set_of(&coin), target_chunks: ChunkDictionary::default() };
+    let (change, change_note) = payment(&entropy.nth_symmetric_key(0).into(), 5);
+    let b2 = block_after(&b1, vec![change], vec![spend], vec![change_note]);
+    w.apply_blocks(vec![rpc(&b2)]).unwrap();
+
+    let history = w.history();
+    assert_eq!(history.len(), 2, "{history:?}");
+    assert_eq!((history[0].direction, history[0].amount.as_str(), history[0].height), ("out", "2", Some(2)));
+    assert_eq!((history[1].direction, history[1].amount.as_str(), history[1].kind), ("in", "7", Some("generation")));
+    assert!(history.iter().all(|h| h.time_ms.is_some() && !h.pending));
+}
+
+#[test]
+fn new_addresses_are_fresh_and_still_receive() {
+    let genesis = Block::genesis(NETWORK);
+    let mut w = wallet_at(&genesis);
+    let first = w.current_address(history::AddressKind::Generation).unwrap();
+    assert_eq!(first.index, 0);
+    assert_eq!(w.receiving_address().unwrap(), first.address);
+    // Far past the scan window's start: the window follows the issued address.
+    let mut latest = first.clone();
+    for _ in 0..40 {
+        latest = w.new_address(history::AddressKind::Generation).unwrap();
+    }
+    assert_eq!(latest.index, 40);
+    assert_ne!(latest.address, first.address);
+    assert_eq!(w.receiving_address().unwrap(), latest.address);
+
+    let entropy = WalletEntropy::from_phrase(PHRASE.split_whitespace()).unwrap();
+    let (r40, n40) = payment(&entropy.nth_generation_spending_key(40).into(), 3);
+    let short_key: SpendingKey = entropy.nth_ec_hybrid_key(0).into();
+    let (rs, ns) = payment(&short_key, 1);
+    let b1 = block_after(&genesis, vec![r40, rs], vec![], vec![n40, ns]);
+    assert_eq!(w.apply_blocks(vec![rpc(&b1)]).unwrap().received, 2);
+    let kinds: Vec<_> = w.history().iter().map(|h| h.kind).collect();
+    assert!(kinds.contains(&Some("ec_hybrid")) && kinds.contains(&Some("generation")));
+    let short = w.current_address(history::AddressKind::EcHybrid).unwrap();
+    assert!(short.address.len() < 400, "an EC Hybrid address is short: {}", short.address.len());
+}
+
+#[test]
+fn a_pending_payment_clears_when_its_coins_are_spent() {
+    let genesis = Block::genesis(NETWORK);
+    let mut w = wallet_at(&genesis);
+    let entropy = WalletEntropy::from_phrase(PHRASE.split_whitespace()).unwrap();
+    let (mine, note) = payment(&entropy.nth_generation_spending_key(0).into(), 7);
+    let b1 = block_after(&genesis, vec![mine], vec![], vec![note]);
+    w.apply_blocks(vec![rpc(&b1)]).unwrap();
+
+    let plan = w.plan_spend("2", "0.05", u64::MAX).unwrap();
+    w.record_pending(&plan, 123);
+    assert_eq!(w.history()[0].pending, true);
+    assert_eq!(w.history()[0].amount, "2.05");
+
+    let coin = w.state().coins[0].clone();
+    let spend = RemovalRecord { absolute_indices: index_set_of(&coin), target_chunks: ChunkDictionary::default() };
+    let b2 = block_after(&b1, vec![], vec![spend], vec![]);
+    w.apply_blocks(vec![rpc(&b2)]).unwrap();
+    assert!(w.state().pending.is_empty());
+    assert!(!w.history()[0].pending);
+}

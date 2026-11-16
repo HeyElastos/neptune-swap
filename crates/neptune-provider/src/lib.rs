@@ -66,6 +66,16 @@ enum Request {
         amount: String,
         fee: String,
     },
+    WalletAddresses {
+        network: String,
+    },
+    WalletNewAddress {
+        network: String,
+        kind: String,
+    },
+    WalletHistory {
+        network: String,
+    },
     HtlcClaimLock {
         network: String,
     },
@@ -214,6 +224,11 @@ impl Provider {
             Request::WalletBalance { network } => {
                 self.wallet(&network, |w, n| w.wallets.balance(&n.id, n.chain, now_ms()))
             }
+            Request::WalletAddresses { network } => self.wallet(&network, |w, n| w.wallets.addresses(&n.id, n.chain)),
+            Request::WalletNewAddress { network, kind } => {
+                self.wallet(&network, |w, n| w.wallets.new_address(&n.id, n.chain, &kind))
+            }
+            Request::WalletHistory { network } => self.wallet(&network, |w, n| w.wallets.history(&n.id, n.chain)),
             Request::WalletSend { network, to, amount, fee } => self.wallet(&network, |w, n| {
                 w.wallets.send(&n.id, n.chain, &to, &amount, &fee, now_ms(), &HttpNode(n.rpc))
             }),

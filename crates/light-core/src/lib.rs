@@ -10,6 +10,7 @@
 //! block proofs, proof of work, or which chain is canonical. It trusts the node
 //! for those, like neptune-wallet-app does.
 
+pub mod history;
 pub mod rpc;
 pub mod send;
 pub mod swap;
@@ -29,7 +30,6 @@ use neptune_primitives::network::Network;
 use neptune_primitives::timestamp::Timestamp;
 use neptune_rpc_api::model::wallet::block::RpcWalletBlock;
 use neptune_wallet::address::KeyType;
-use neptune_wallet::address::ReceivingAddress;
 use neptune_wallet::address::SpendingKey;
 use neptune_wallet::secret_key_material::SecretKeyMaterial;
 use neptune_wallet::wallet_entropy::WalletEntropy;
@@ -65,6 +65,11 @@ pub struct Coin {
     pub received_height: u64,
     pub received_block: Digest,
     pub spent_height: Option<u64>,
+    /// Block times (ms), for the activity list.
+    #[serde(default)]
+    pub received_ms: u64,
+    #[serde(default)]
+    pub spent_ms: Option<u64>,
 }
 
 /// The last block applied.
@@ -86,6 +91,12 @@ pub struct WalletState {
     /// The next Symmetric key index to send change to.
     #[serde(default)]
     pub next_change: u64,
+    /// The key index of the address handed out, per kind (Generation, EC Hybrid).
+    #[serde(default)]
+    pub issued: [u64; 2],
+    /// Payments submitted and not yet seen in a block.
+    #[serde(default)]
+    pub pending: Vec<history::PendingSend>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -154,7 +165,7 @@ impl LightWallet {
         let words: Vec<&str> = phrase.split_whitespace().collect();
         ensure!(words.len() == 18, "a Neptune seed phrase has 18 words, got {}", words.len());
         let entropy = WalletEntropy::from_phrase(words)?;
-        let state = WalletState { network, sync: None, coins: vec![], derived: [0; 3], next_change: 0 };
+        let state = WalletState { network, sync: None, coins: vec![], derived: [0; 3], next_change: 0, issued: [0; 2], pending: vec![] };
         Self::with_state(entropy, state)
     }
 
@@ -207,9 +218,9 @@ impl LightWallet {
     }
 
     /// The default receiving address (Generation key 0), bech32m.
+    /// The Generation address currently handed out (key 0 until a new one is asked for).
     pub fn receiving_address(&self) -> Result<String> {
-        let address: ReceivingAddress = self.entropy.nth_generation_spending_key(0).to_address().into();
-        address.to_bech32m(self.state.network)
+        Ok(self.current_address(history::AddressKind::Generation)?.address)
     }
 
     /// Start syncing after `point` instead of from genesis (a new wallet
@@ -242,6 +253,7 @@ impl LightWallet {
         for block in blocks {
             self.apply_block(block, true, &mut report)?;
         }
+        self.prune_pending();
         report.height = self.state.sync.map(|s| s.height);
         Ok(report)
     }
@@ -281,13 +293,14 @@ impl LightWallet {
         }
 
         let tx = &kernel.body.transaction_kernel;
+        let time_ms = kernel.header.timestamp.to_millis();
         report.blocks += 1;
         report.announcements += tx.announcements.len() as u64;
         report.inputs += tx.inputs.len() as u64;
 
         // Spends first: a coin received and spent in one block is still found
         // below, then marked spent by the second pass.
-        report.spent += self.mark_spends(tx.inputs.iter().map(|rr| &rr.absolute_indices), height);
+        report.spent += self.mark_spends(tx.inputs.iter().map(|rr| &rr.absolute_indices), height, time_ms);
 
         let aocl_prior = kernel.body.num_aocl_leafs_prior();
         let mut extended = true;
@@ -324,6 +337,8 @@ impl LightWallet {
                         received_height: height,
                         received_block: hash,
                         spent_height: None,
+                        received_ms: time_ms,
+                        spent_ms: None,
                     });
                     self.by_index_set.insert(index_set_hash, self.state.coins.len() - 1);
                     report.received += 1;
@@ -338,7 +353,7 @@ impl LightWallet {
                 extended = true;
             }
         }
-        report.spent += self.mark_spends(tx.inputs.iter().map(|rr| &rr.absolute_indices), height);
+        report.spent += self.mark_spends(tx.inputs.iter().map(|rr| &rr.absolute_indices), height, time_ms);
 
         if in_order {
             self.state.sync = Some(SyncPoint { height, hash });
@@ -346,13 +361,14 @@ impl LightWallet {
         Ok(())
     }
 
-    fn mark_spends<'a>(&mut self, index_sets: impl Iterator<Item = &'a AbsoluteIndexSet>, height: u64) -> u64 {
+    fn mark_spends<'a>(&mut self, index_sets: impl Iterator<Item = &'a AbsoluteIndexSet>, height: u64, time_ms: u64) -> u64 {
         let mut spent = 0;
         for set in index_sets {
             if let Some(&i) = self.by_index_set.get(&Tip5::hash(set)) {
                 let coin = &mut self.state.coins[i];
                 if coin.spent_height.is_none() {
                     coin.spent_height = Some(height);
+                    coin.spent_ms = Some(time_ms);
                     spent += 1;
                 }
             }
