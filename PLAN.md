@@ -277,6 +277,22 @@ a coin received before the wallet kept the set still asks the node once.
   runs through Wallet. The form connects on Base (the dev Home's local chain). BTC: Wallet cannot
   send Bitcoin yet.
 
+## Risks: DDoS, spam, cheating, and what elastOS gives (2026-11-16)
+
+| Risk | Defence | elastOS part |
+|---|---|---|
+| Flood of intents/quotes/offers on a topic | Drop before parse (rule 5): size cap (64 KiB at the gateway, 16 KiB per message), signature first; per-DID rate limit and a small proof of work (or a stake) for intents and public offers | The gateway's peer route already caps size, forces our topic prefix and owns sender ids and cursors; rate limits per launch session belong there |
+| Sybil solvers, fake offers | Long-lived solver DIDs with reputation (completed swaps, refunds), a signed solver list as the bootstrap, offers only from DIDs that can show a lock history | DIDs and the carrier resolve parties without domains; DID documents can carry the reputation pointer |
+| A solver that never locks | HTLC timing: the NPT giver's lock refunds later than the other chain's; a no-show only wastes time; reputation drops | Runtime capability approvals keep every payment the user's own decision |
+| Griefing locks (lock, never claim) | Short quote TTLs; refunds automatic after T; solvers price in the capital lockup | |
+| DoS on the user's Home | Nothing listens (rule 2); the node runs `--no-incoming`; the provider talks only to the local runtime | Capsule sandbox (CSP, opaque origin, Home-only connect-src); providers out of process; least capability per app |
+| Price manipulation | Several sources, flagged when apart; display only, never in amounts | Approval before the app may ask public sources |
+| Stolen launch token | Tokens bound to the launch session; keys never in the capsule (rule 3) | Home launch tokens, Wallet passkey per payment |
+| Seed theft on disk | Encrypted seed (not built: dev stores it plain, 0600) | Runtime keystore when it lands |
+
+Not built yet: per-DID rate limits and proof of work, reputation, the signed solver list,
+encrypted seed. elastOS 0.8.0 isolation gaps (see Known limits) still apply.
+
 ## M8 design: the other leg through elastOS Wallet (read from runtime v2.0.1)
 
 What elastOS 2.0.1 offers (`docs/CHAIN_PROVIDER.md`, `docs/WALLET_PROVIDER.md`):
