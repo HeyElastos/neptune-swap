@@ -3377,7 +3377,11 @@ dependencies = [
 name = "light-cli"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "light-core",
+ "serde_json",
+ "tokio",
+ "ureq",
 ]
 
 [[package]]

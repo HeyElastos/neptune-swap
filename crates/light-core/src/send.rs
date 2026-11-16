@@ -6,6 +6,7 @@
 //! so this is meant for the user's own node (the provider's loopback node).
 
 use anyhow::{bail, ensure, Context, Result};
+use neptune_consensus::consensus_rule_set::ConsensusRuleSet;
 use neptune_consensus::transaction::validity::proof_collection::ProofCollection;
 use neptune_consensus::transaction::primitive_witness::PrimitiveWitness;
 use neptune_consensus::transaction::{Transaction, TransactionProof};
@@ -185,9 +186,10 @@ pub async fn check_witness(witness: &PrimitiveWitness) -> Result<()> {
 }
 
 /// The shareable transaction: its kernel and a proof that reveals no secret.
-/// Networks with mock proofs (regtest) get a mock proof collection.
-pub async fn prove(details: &TransactionDetails) -> Result<Transaction> {
-    prove_witness(details.primitive_witness(), details.network).await
+/// Networks with mock proofs (regtest) get a mock proof collection; others a
+/// real one. `height` is the chain's tip: it picks the consensus rule set.
+pub async fn prove(details: &TransactionDetails, height: u64) -> Result<Transaction> {
+    prove_witness(details.primitive_witness(), details.network, height).await
 }
 
 /// Like [`prove`], for a primitive witness already assembled. Every call to
@@ -195,11 +197,51 @@ pub async fn prove(details: &TransactionDetails) -> Result<Transaction> {
 /// encrypted UTXO notifications, so a witness that commits to its kernel (an
 /// HTLC refund proves the kernel's timestamp) is completed on one assembled
 /// witness and proven from it.
-pub async fn prove_witness(witness: PrimitiveWitness, network: Network) -> Result<Transaction> {
+pub async fn prove_witness(witness: PrimitiveWitness, network: Network, height: u64) -> Result<Transaction> {
     check_witness(&witness).await?;
-    if !network.use_mock_proof() {
-        bail!("proving on {network} is not built yet (ProofCollection with the Triton VM prover)");
+    if network.use_mock_proof() {
+        let proof = ProofCollection::produce_mock(&witness, true);
+        return Ok(Transaction { kernel: witness.kernel, proof: TransactionProof::ProofCollection(proof) });
     }
-    let proof = ProofCollection::produce_mock(&witness, true);
-    Ok(Transaction { kernel: witness.kernel, proof: TransactionProof::ProofCollection(proof) })
+    prove_collection(witness, network, height).await
+}
+
+/// A real `ProofCollection` (Triton VM STARKs, one per lock script, type
+/// script and transaction rule) for `network` at `height`, and a self-check:
+/// every proof is verified before the transaction leaves. A node's
+/// `wallet_submitTransaction` checks only the kernel and lets its peers find a
+/// bad proof later, so an unchecked one would wait for confirmation forever.
+///
+/// The prover runs out of process: the `neptune-prover` binary must sit next
+/// to the running executable.
+pub async fn prove_collection(witness: PrimitiveWitness, network: Network, height: u64) -> Result<Transaction> {
+    use neptune_consensus::proof_abstractions::tasm::program::TritonVmProofJobOptions;
+    use neptune_consensus::proof_abstractions::tasm::prover_job::ProverJobSettings;
+    use neptune_consensus::proof_abstractions::triton_vm_env_vars::TritonVmEnvVars;
+    use neptune_consensus::proof_abstractions::triton_vm_job_queue::{vm_job_queue, TritonVmJobPriority};
+    use neptune_consensus::proof_abstractions::tx_proving_capability::TxProvingCapability;
+    use neptune_consensus::transaction::transaction_proof::TransactionProofType;
+    use neptune_primitives::mast_hash::MastHash;
+
+    let rule_set = ConsensusRuleSet::infer_from(network, BlockHeight::from(height));
+    let options = TritonVmProofJobOptions {
+        job_priority: TritonVmJobPriority::High,
+        job_settings: ProverJobSettings::new(
+            None,
+            network,
+            TxProvingCapability::ProofCollection,
+            TransactionProofType::ProofCollection,
+            TritonVmEnvVars::default(),
+        ),
+        cancel_job_rx: None,
+    };
+    let proof = ProofCollection::produce(&witness, rule_set, vm_job_queue(), options)
+        .await
+        .map_err(|e| anyhow::anyhow!("proving failed: {e}"))?;
+    let transaction = Transaction { kernel: witness.kernel, proof: TransactionProof::ProofCollection(proof) };
+    ensure!(
+        transaction.proof.verify(transaction.kernel.mast_hash(), network, rule_set).await,
+        "the proofs do not verify; nothing was sent"
+    );
+    Ok(transaction)
 }

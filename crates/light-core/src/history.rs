@@ -125,8 +125,21 @@ impl LightWallet {
 
     /// Records a submitted payment as pending.
     pub fn record_pending(&mut self, plan: &SpendPlan, now_ms: u64) {
+        let pending = self.pending_for(plan, now_ms);
+        self.add_pending(pending);
+    }
+
+    /// The pending record a payment of `plan` will get once it is submitted
+    /// (kept aside while it is proven).
+    pub fn pending_for(&self, plan: &SpendPlan, now_ms: u64) -> PendingSend {
         let coins = plan.coins.iter().map(|&i| self.state.coins[i].index_set_hash).collect();
-        self.state.pending.push(PendingSend { amount: npt(plan.amount + plan.fee), coins, time_ms: now_ms });
+        PendingSend { amount: npt(plan.amount + plan.fee), coins, time_ms: now_ms }
+    }
+
+    pub fn add_pending(&mut self, pending: PendingSend) {
+        if !self.state.pending.contains(&pending) {
+            self.state.pending.push(pending);
+        }
     }
 
     /// Drops pending payments whose coins a block has spent: they show as sent.

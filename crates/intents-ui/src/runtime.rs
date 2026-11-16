@@ -105,6 +105,14 @@ mod web {
         (js_sys::Date::now() / 1000.0) as u64
     }
 
+    /// Waits `ms` milliseconds without blocking the page.
+    pub async fn sleep_ms(ms: u32) {
+        let promise = js_sys::Promise::new(&mut |resolve, _| {
+            let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms as i32);
+        });
+        let _ = JsFuture::from(promise).await;
+    }
+
     /// A block time in the viewer's locale and time zone.
     pub fn format_time(ms: u64) -> String {
         let date = js_sys::Date::new(&JsValue::from_f64(ms as f64));
@@ -206,7 +214,7 @@ mod web {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{announce, copy_text, format_time, home_token, listen_clipboard, now_secs, provider, query};
+pub use web::{announce, copy_text, format_time, home_token, listen_clipboard, now_secs, provider, query, sleep_ms};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn home_token() -> Option<String> {
@@ -223,6 +231,10 @@ pub fn announce(_token: &str) {}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn listen_clipboard() {}
+
+/// Natively there is no provider to wait for.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn sleep_ms(_ms: u32) {}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn copy_text(_token: &str, _purpose: &str, _text: &str, done: Box<dyn FnOnce(Result<(), String>)>) {

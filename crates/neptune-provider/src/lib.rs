@@ -66,6 +66,10 @@ enum Request {
         amount: String,
         fee: String,
     },
+    WalletSendStatus {
+        network: String,
+        job: String,
+    },
     WalletAddresses {
         network: String,
     },
@@ -146,9 +150,14 @@ struct Network {
 }
 
 /// The node of one network, over JSON-RPC.
+#[derive(Clone)]
 struct HttpNode(String);
 
 impl Node for HttpNode {
+    fn handle(&self) -> Box<dyn Node + Send> {
+        Box::new(self.clone())
+    }
+
     fn call(&self, body: String) -> anyhow::Result<String> {
         let reply = ureq::post(&self.0)
             .timeout(BLOCKS_TIMEOUT)
@@ -231,6 +240,9 @@ impl Provider {
             }
             Request::WalletBalance { network } => {
                 self.wallet(&network, |w, n| w.wallets.balance(&n.id, n.chain, now_ms()))
+            }
+            Request::WalletSendStatus { network, job } => {
+                self.wallet(&network, |w, n| w.wallets.send_status(&n.id, n.chain, &job))
             }
             Request::WalletAddresses { network } => self.wallet(&network, |w, n| w.wallets.addresses(&n.id, n.chain)),
             Request::WalletNewAddress { network, kind } => {

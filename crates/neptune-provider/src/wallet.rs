@@ -29,15 +29,33 @@ pub const SYNC_STEP: u64 = 500;
 /// Sends one JSON-RPC body to the node and returns its reply.
 pub trait Node {
     fn call(&self, body: String) -> Result<String>;
+    /// An owned handle to the same node, for a background job.
+    fn handle(&self) -> Box<dyn Node + Send>;
+}
+
+/// A payment being proven in the background. Real proving takes about half a
+/// minute per input, longer than the Runtime waits for one provider reply.
+enum JobState {
+    Proving,
+    Sent { recorded: bool },
+    Failed(String),
+}
+
+struct Job {
+    network_id: String,
+    state: std::sync::Arc<std::sync::Mutex<JobState>>,
+    pending: light_core::history::PendingSend,
+    reply: Value,
 }
 
 pub struct Wallets {
     root: Option<PathBuf>,
+    jobs: std::sync::Mutex<std::collections::HashMap<String, Job>>,
 }
 
 impl Wallets {
     pub fn new(root: Option<PathBuf>) -> Self {
-        Self { root }
+        Self { root, jobs: Default::default() }
     }
 
     fn dir(&self, network_id: &str) -> Result<PathBuf> {
@@ -149,13 +167,52 @@ impl Wallets {
         let snapshot = rpc::parse_membership_snapshot(
             &node.call(rpc::restore_membership_proof_request(plan.index_sets.clone()))?,
         )?;
+        let mut jobs = self.jobs.lock().map_err(|_| anyhow::anyhow!("jobs lock"))?;
+        if jobs.values().any(|j| j.network_id == network_id && matches!(*j.state.lock().unwrap(), JobState::Proving)) {
+            bail!("a payment is still being proven; wait for it first");
+        }
         let (details, built) = wallet.build_payment(to, &plan, snapshot, now_ms)?;
-        prove_and_submit(&details, node)?;
-        // The change key index moved on; the payment shows as pending until a
-        // block includes it and its coins show as spent.
-        wallet.record_pending(&plan, now_ms);
+        // The change key index moved on: keep it, so no later payment reuses it.
         self.save_state(network_id, &wallet)?;
-        Ok(json!({ "sent": amount.trim(), "fee": fee.trim(), "inputs": built.inputs, "change": built.change }))
+
+        let id = format!("{now_ms:x}-{}", jobs.len());
+        let state = std::sync::Arc::new(std::sync::Mutex::new(JobState::Proving));
+        let (job_state, job_node) = (state.clone(), node.handle());
+        let witness = details.primitive_witness();
+        std::thread::spawn(move || {
+            let outcome = submit_witness(witness, network, job_node.as_ref());
+            *job_state.lock().unwrap() = match outcome {
+                Ok(()) => JobState::Sent { recorded: false },
+                Err(e) => JobState::Failed(format!("{e:#}")),
+            };
+        });
+        let reply = json!({ "sent": amount.trim(), "fee": fee.trim(), "inputs": built.inputs, "change": built.change });
+        jobs.insert(id.clone(), Job { network_id: network_id.to_string(), state, pending: wallet.pending_for(&plan, now_ms), reply });
+        Ok(json!({ "job": id, "state": "proving" }))
+    }
+
+    /// Where a payment job stands: "proving", "sent" (with what was sent) or
+    /// "failed" (with why). A sent payment is recorded as pending the first
+    /// time it is seen here.
+    pub fn send_status(&self, network_id: &str, network: Network, job: &str) -> Result<Value> {
+        let jobs = self.jobs.lock().map_err(|_| anyhow::anyhow!("jobs lock"))?;
+        let found = jobs.get(job).filter(|j| j.network_id == network_id).context("no such payment")?;
+        let mut state = found.state.lock().unwrap();
+        Ok(match &mut *state {
+            JobState::Proving => json!({ "state": "proving" }),
+            JobState::Failed(message) => json!({ "state": "failed", "message": message }),
+            JobState::Sent { recorded } => {
+                if !*recorded {
+                    let mut wallet = self.load(network_id, network)?.context("no wallet")?;
+                    wallet.add_pending(found.pending.clone());
+                    self.save_state(network_id, &wallet)?;
+                    *recorded = true;
+                }
+                let mut reply = found.reply.clone();
+                reply["state"] = json!("sent");
+                reply
+            }
+        })
     }
 
     /// The address handed out for each kind.
@@ -220,10 +277,12 @@ fn submit_witness(
     network: Network,
     node: &dyn Node,
 ) -> Result<()> {
+    // The tip picks the consensus rule set the proofs are made for.
+    let height = rpc::parse_height(&node.call(rpc::height_request())?)?;
     let transaction = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(light_core::send::prove_witness(witness, network))?;
+        .block_on(light_core::send::prove_witness(witness, network, height))?;
     let rpc_transaction = light_core::neptune_rpc_api::model::wallet::transaction::RpcTransaction::try_from(transaction)
         .map_err(|e| anyhow::anyhow!(e))?;
     if !rpc::parse_submitted(&node.call(rpc::submit_transaction_request(rpc_transaction))?)? {
@@ -267,6 +326,10 @@ mod tests {
     }
 
     impl Node for FixtureNode {
+        fn handle(&self) -> Box<dyn Node + Send> {
+            Box::new(FixtureNode(self.0.clone()))
+        }
+
         fn call(&self, body: String) -> Result<String> {
             let v: Value = serde_json::from_str(&body)?;
             match v["method"].as_str() {

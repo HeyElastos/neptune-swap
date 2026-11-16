@@ -32,6 +32,14 @@ PY
 # checksum, as the Runtime verifies before it starts a native provider.
 nice -n 10 cargo build --release -p neptune-provider
 install -m 0755 target/release/neptune-provider "$DATA/bin/neptune-provider"
+# Real proving (testnet, main net) runs the Triton VM prover out of process; it
+# must sit next to the provider. Built from the vendored neptune-core.
+PROVER=vendor/neptune-core/target/release/neptune-prover
+if [ -x "$PROVER" ]; then
+  install -m 0755 "$PROVER" "$DATA/bin/neptune-prover"
+else
+  echo "warning: $PROVER missing; only mock-proof networks can send" >&2
+fi
 SUM="sha256:$(shasum -a 256 "$DATA/bin/neptune-provider" | cut -d' ' -f1)"
 SIZE="$(stat -f %z "$DATA/bin/neptune-provider")"
 python3 -I - "$DATA/components.json" "$SUM" "$SIZE" <<'PY'

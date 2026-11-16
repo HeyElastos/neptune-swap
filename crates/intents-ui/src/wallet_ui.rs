@@ -423,26 +423,50 @@ async fn send(weak: Weak<AppWindow>, page: Shared) {
     });
     app.set_wallet_busy(true);
     app.set_wallet_error(SharedString::new());
+    app.set_wallet_notice("Preparing the payment…".into());
     drop(app);
-    match call(&weak, &page, "wallet_send", body).await {
-        Ok(sent) => {
-            if let Some(app) = weak.upgrade() {
-                app.set_wallet_send_to(SharedString::new());
-                app.set_wallet_send_amount(SharedString::new());
-                app.set_wallet_state("ready".into());
-                app.set_wallet_notice(
-                    format!(
-                        "Sent {} NPT. It counts once a block includes it; {} NPT change comes back to this wallet.",
-                        sent["sent"].as_str().unwrap_or("?"),
-                        sent["change"].as_str().unwrap_or("0"),
-                    )
-                    .into(),
-                );
-            }
-            sync(weak, page).await;
-        }
-        Err(message) => fail(&weak, message),
+    // The provider proves in the background (about half a minute per coin
+    // spent on a real network) and answers with a job to ask about.
+    let job = match call(&weak, &page, "wallet_send", body).await {
+        Ok(started) => started["job"].as_str().unwrap_or_default().to_string(),
+        Err(message) => return fail_send(&weak, message),
+    };
+    if let Some(app) = weak.upgrade() {
+        app.set_wallet_notice("Proving the payment on this computer. This takes about half a minute for each coin it spends.".into());
     }
+    let sent = loop {
+        runtime::sleep_ms(2000).await;
+        match call(&weak, &page, "wallet_send_status", json!({ "job": job })).await {
+            Ok(status) if status["state"] == "proving" => continue,
+            Ok(status) if status["state"] == "sent" => break status,
+            Ok(status) => {
+                return fail_send(&weak, status["message"].as_str().unwrap_or("The payment failed.").to_string())
+            }
+            Err(message) => return fail_send(&weak, message),
+        }
+    };
+    if let Some(app) = weak.upgrade() {
+        app.set_wallet_send_to(SharedString::new());
+        app.set_wallet_send_amount(SharedString::new());
+        app.set_wallet_state("ready".into());
+        app.set_wallet_notice(
+            format!(
+                "Sent {} NPT. It counts once a block includes it; {} NPT change comes back to this wallet.",
+                sent["sent"].as_str().unwrap_or("?"),
+                sent["change"].as_str().unwrap_or("0"),
+            )
+            .into(),
+        );
+    }
+    sync(weak, page).await;
+}
+
+/// A payment that did not go out: back to the review, with the reason.
+fn fail_send(weak: &Weak<AppWindow>, message: String) {
+    if let Some(app) = weak.upgrade() {
+        app.set_wallet_notice(SharedString::new());
+    }
+    fail(weak, message);
 }
 
 /// The review line for a payment, or what is wrong with the form.

@@ -534,6 +534,7 @@ component WalletCard inherits VerticalLayout {
             Text { text: root.send-summary; color: Skin.ink; font-size: Ty.body; wrap: word-wrap; }
         }
     }
+    if root.state == "confirm" && root.notice != "": Text { text: root.notice; color: Skin.ink; font-size: Ty.small; wrap: word-wrap; }
     if root.state == "confirm": Text {
         text: "A payment cannot be undone. Check the address before you confirm.";
         color: Skin.muted;
