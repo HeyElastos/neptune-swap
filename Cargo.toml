@@ -10,6 +10,7 @@ members = [
     "crates/htlc",
     "crates/swap-guard",
     "crates/evm-htlc",
+    "crates/evm-signer",
 ]
 exclude = ["vendor"]
 
