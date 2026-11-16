@@ -282,3 +282,12 @@ fn a_pending_payment_clears_when_its_coins_are_spent() {
     assert!(w.state().pending.is_empty());
     assert!(!w.history()[0].pending);
 }
+
+#[test]
+fn work_compares_as_big_decimals() {
+    use std::cmp::Ordering::*;
+    assert_eq!(work_cmp("340282366920938463463374607431768211456", "99"), Greater);
+    assert_eq!(work_cmp("100", "0099"), Greater);
+    assert_eq!(work_cmp("123", "124"), Less);
+    assert_eq!(work_cmp("7", "7"), Equal);
+}

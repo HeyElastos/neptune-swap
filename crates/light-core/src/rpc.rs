@@ -15,6 +15,7 @@ use neptune_rpc_api::model::message::GetBlocksRequest;
 use neptune_rpc_api::model::message::GetBlocksResponse;
 use neptune_rpc_api::model::message::HeightResponse;
 use neptune_rpc_api::model::message::TipResponse;
+use neptune_rpc_api::model::message::GetBlockResponse;
 use neptune_rpc_api::model::message::RestoreMembershipProofRequest;
 use neptune_rpc_api::model::message::RestoreMembershipProofResponse;
 use neptune_rpc_api::model::message::SubmitTransactionRequest;
@@ -47,6 +48,11 @@ pub fn height_request() -> String {
 /// The tip as a full block with its proof (~2.5 MB of JSON on main net).
 pub fn tip_request() -> String {
     body("chain_tip", json!([]))
+}
+
+/// One block with its proof (the node needs the archival module).
+pub fn get_block_request(height: u64) -> String {
+    body("archival_getBlock", json!([height]))
 }
 
 pub fn get_blocks_request(from: u64, to: u64) -> String {
@@ -88,6 +94,10 @@ fn result<T: DeserializeOwned>(response: &str) -> Result<T> {
 
 pub fn parse_height(response: &str) -> Result<u64> {
     Ok(result::<HeightResponse>(response)?.height.into())
+}
+
+pub fn parse_block(response: &str) -> Result<RpcBlock> {
+    result::<GetBlockResponse>(response)?.block.ok_or_else(|| anyhow!("the node does not have that block"))
 }
 
 pub fn parse_tip(response: &str) -> Result<RpcBlock> {

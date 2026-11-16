@@ -50,3 +50,6 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.tasm-lib]
 opt-level = 3
+# The tests verify real block proofs.
+[profile.dev.package.triton-vm]
+opt-level = 3

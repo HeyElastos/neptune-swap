@@ -5929,6 +5929,7 @@ name = "solver"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "ed25519-dalek",
  "evm-htlc",
  "evm-signer",
@@ -5937,6 +5938,7 @@ dependencies = [
  "rand 0.10.3",
  "serde",
  "serde_json",
+ "ureq",
 ]
 
 [[package]]

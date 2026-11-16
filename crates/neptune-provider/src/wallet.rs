@@ -156,9 +156,26 @@ impl Wallets {
         }
         self.save_state(network_id, &wallet)?;
         let height = wallet.state().sync.map(|s| s.height);
+        let done = height.is_some_and(|h| h >= tip);
+        // At the tip, check its proof ourselves (main net: the only network
+        // with an activation checkpoint compiled in), unless already done.
+        let verifiable = network == Network::Main;
+        let already = wallet.state().verified.as_ref().map(|v| v.height) == height;
+        if done && verifiable && !already {
+            let synced = height.unwrap_or_default();
+            let tip_block = rpc::parse_block(&node.call(rpc::get_block_request(synced))?)?;
+            let parent = blocks(node, synced - 1, synced - 1)?.into_iter().next().context("the node lacks the parent block")?;
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(wallet.verify_synced_tip(tip_block, parent, now_ms()))
+                .context("the node's chain did not verify; nothing from it is trusted")?;
+            self.save_state(network_id, &wallet)?;
+        }
+        let verified_height = wallet.state().verified.as_ref().map(|v| v.height);
         Ok(json!({
             "synced_height": height, "tip": tip, "received": received, "spent": spent,
-            "done": height.is_some_and(|h| h >= tip),
+            "done": done, "verified_height": verified_height, "verifiable": verifiable,
         }))
     }
 
@@ -305,6 +322,10 @@ fn blocks(node: &dyn Node, from: u64, to: u64) -> Result<Vec<light_core::neptune
     rpc::parse_blocks(&node.call(rpc::get_blocks_request(from, to))?)
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
     file.write_all(bytes)?;
@@ -319,28 +340,46 @@ mod tests {
     use super::*;
 
     /// A node whose tip is main-net block 62,980 (light-core's fixture).
-    struct FixtureNode(String);
+    /// A main-net node whose tip is block 62,981 (light-core's fixtures: the
+    /// tip with its proof, and its parent 62,980).
+    #[derive(Clone)]
+    struct FixtureNode {
+        parent: String,
+        tip_full: String,
+        tip_wallet: String,
+    }
+
+    fn gunzip(gz: &[u8]) -> String {
+        let mut text = String::new();
+        flate2::read::GzDecoder::new(gz).read_to_string(&mut text).unwrap();
+        text
+    }
 
     impl FixtureNode {
         fn new() -> Self {
-            let gz: &[u8] = include_bytes!("../../light-core/fixtures/main-parent.json.gz");
-            let mut reply = String::new();
-            flate2::read::GzDecoder::new(gz).read_to_string(&mut reply).unwrap();
-            Self(reply)
+            let parent = gunzip(include_bytes!("../../light-core/fixtures/main-parent.json.gz"));
+            // chain_tip's reply has archival_getBlock's shape: {"block": ...}.
+            let tip_full = gunzip(include_bytes!("../../light-core/fixtures/main-tip.json.gz"));
+            let block: light_core::neptune_consensus::block::Block = rpc::parse_tip(&tip_full).unwrap().into();
+            let wallet_block = light_core::neptune_rpc_api::model::wallet::block::RpcWalletBlock::from(&block);
+            let tip_wallet = json!({ "jsonrpc": "2.0", "id": 1, "result": { "blocks": [wallet_block] } }).to_string();
+            Self { parent, tip_full, tip_wallet }
         }
     }
 
     impl Node for FixtureNode {
         fn handle(&self) -> Box<dyn Node + Send> {
-            Box::new(FixtureNode(self.0.clone()))
+            Box::new(self.clone())
         }
 
         fn call(&self, body: String) -> Result<String> {
             let v: Value = serde_json::from_str(&body)?;
             match v["method"].as_str() {
-                Some("chain_height") => Ok(r#"{"jsonrpc":"2.0","id":1,"result":{"height":62980}}"#.into()),
-                Some("wallet_getBlocks") if v["params"] == json!([62980, 62980]) => Ok(self.0.clone()),
+                Some("chain_height") => Ok(r#"{"jsonrpc":"2.0","id":1,"result":{"height":62981}}"#.into()),
+                Some("wallet_getBlocks") if v["params"] == json!([62980, 62980]) => Ok(self.parent.clone()),
+                Some("wallet_getBlocks") if v["params"] == json!([62981, 62981]) => Ok(self.tip_wallet.clone()),
                 Some("wallet_getBlocks") => Ok(r#"{"jsonrpc":"2.0","id":1,"result":{"blocks":[]}}"#.into()),
+                Some("archival_getBlock") if v["params"] == json!([62981]) => Ok(self.tip_full.clone()),
                 other => bail!("unexpected call {other:?}"),
             }
         }
@@ -376,11 +415,13 @@ mod tests {
         }
 
         let status = wallets.status("neptune-main", Network::Main).unwrap();
-        assert_eq!(status["synced_height"], 62980);
+        assert_eq!(status["synced_height"], 62981);
         assert_eq!(status["address"], created["address"]);
         // Synced to the tip already: nothing to apply, balance zero.
         let synced = wallets.sync("neptune-main", Network::Main, &node).unwrap();
         assert_eq!(synced["done"], true);
+        // At the tip, the wallet checked block 62,981's proof itself.
+        assert_eq!(synced["verified_height"], 62981);
         assert_eq!(wallets.balance("neptune-main", Network::Main, 0).unwrap()["balance"]["unspent_coins"], 0);
 
         assert!(wallets.create("neptune-main", Network::Main, &node).is_err(), "never overwrite a seed");

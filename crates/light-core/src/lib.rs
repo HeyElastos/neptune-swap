@@ -97,6 +97,20 @@ pub struct WalletState {
     /// Payments submitted and not yet seen in a block.
     #[serde(default)]
     pub pending: Vec<history::PendingSend>,
+    /// The latest synced block whose proof this wallet verified itself
+    /// (succinct validation): the chain up to it is valid, whatever node
+    /// served it.
+    #[serde(default)]
+    pub verified: Option<VerifiedPoint>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerifiedPoint {
+    pub height: u64,
+    pub hash: Digest,
+    /// Proven proof of work since the activation of succinct validation; a
+    /// later tip must not carry less (that would be a lighter, other chain).
+    pub work_since_activation: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -165,7 +179,7 @@ impl LightWallet {
         let words: Vec<&str> = phrase.split_whitespace().collect();
         ensure!(words.len() == 18, "a Neptune seed phrase has 18 words, got {}", words.len());
         let entropy = WalletEntropy::from_phrase(words)?;
-        let state = WalletState { network, sync: None, coins: vec![], derived: [0; 3], next_change: 0, issued: [0; 2], pending: vec![] };
+        let state = WalletState { network, sync: None, coins: vec![], derived: [0; 3], next_change: 0, issued: [0; 2], pending: vec![], verified: None };
         Self::with_state(entropy, state)
     }
 
@@ -221,6 +235,38 @@ impl LightWallet {
     /// The Generation address currently handed out (key 0 until a new one is asked for).
     pub fn receiving_address(&self) -> Result<String> {
         Ok(self.current_address(history::AddressKind::Generation)?.address)
+    }
+
+    /// Verifies the block the wallet is synced to: `tip` must be that block,
+    /// as `archival_getBlock` returns it (with its proof), `parent` its parent
+    /// (`wallet_getBlocks`). Every block applied links to it by hash, so a
+    /// valid tip vouches for all of them. Networks without an activation
+    /// checkpoint (testnet, regtest) cannot be verified this way.
+    pub async fn verify_synced_tip(
+        &mut self,
+        tip: neptune_rpc_api::model::block::RpcBlock,
+        parent: RpcWalletBlock,
+        now_ms: u64,
+    ) -> Result<VerifiedPoint> {
+        let sync = self.state.sync.ok_or_else(|| anyhow::anyhow!("nothing synced to verify"))?;
+        let verified = tip::verify_tip(tip, parent, self.state.network, now_ms).await?;
+        ensure!(
+            verified.height == sync.height && verified.hash == sync.hash,
+            "the verified block is not the one the wallet synced to"
+        );
+        if let Some(earlier) = &self.state.verified {
+            ensure!(
+                work_cmp(&verified.work_since_activation, &earlier.work_since_activation).is_ge(),
+                "the node now serves a chain with less work than the one verified before"
+            );
+        }
+        let point = VerifiedPoint {
+            height: verified.height,
+            hash: verified.hash,
+            work_since_activation: verified.work_since_activation,
+        };
+        self.state.verified = Some(point.clone());
+        Ok(point)
     }
 
     /// Start syncing after `point` instead of from genesis (a new wallet
@@ -393,6 +439,12 @@ impl LightWallet {
             spent_coins: self.state.coins.len() - unspent.len(),
         }
     }
+}
+
+/// Compares two amounts of work printed as decimal integers of any size.
+pub fn work_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (a, b) = (a.trim_start_matches('0'), b.trim_start_matches('0'));
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
 }
 
 /// An amount in NPT without trailing zeros: "14.95", "25", "0".
