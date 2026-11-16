@@ -257,6 +257,26 @@ Left: HTLC lock/claim still use the node's proofs; the swap-guard check against 
 tip's block MMR; comparing `work_since_activation` across nodes to pick the heaviest chain;
 a coin received before the wallet kept the set still asks the node once.
 
+## Prices, wallet choice (2026-11-16)
+
+- **USD reference prices.** `Show USD prices` in the swap form calls `neptune/prices`. The runtime
+  fork's gateway first asks the user in Home (capability `elastos://neptune/prices`, read; granted
+  once per gateway run); the provider then asks CoinGecko (NPT, BTC, ETH, USDC) and Kraken (BTC,
+  ETH, USDC), takes the mean, flags sources more than 2 % apart, caches a minute, and only when
+  its config sets `price_sources` (the dev Home does). The form shows each amount in USD, the
+  unit prices and how the asked amount compares with the market; the review shows USD too.
+  Display only. Deliberate exception to rule 1, opt-in per Home: the sources see this
+  computer's address and when it asks, never what it swaps. Later: signed price reports over
+  the carrier, so no Home asks the sources itself.
+- **Wallet choice for the other leg.** elastOS Wallet owns the accounts and the approval methods
+  (its own passkey, MetaMask; UniSat for Bitcoin), so the app does not pick a wallet itself: it
+  asks Wallet for the account (`request-accounts`, approved in the Wallet app, 12 h per page) and
+  every payment is approved the way the user set up that account. **The app bridge serves only
+  Elastos ESC (`eip155:20`) and Base (`eip155:8453`), not Ethereum main net**: the protocol's
+  `Chain::Ethereum` (and the USDC contract in `ASSETS`) must gain Base/ESC before a real EVM leg
+  runs through Wallet. The form connects on Base (the dev Home's local chain). BTC: Wallet cannot
+  send Bitcoin yet.
+
 ## M8 design: the other leg through elastOS Wallet (read from runtime v2.0.1)
 
 What elastOS 2.0.1 offers (`docs/CHAIN_PROVIDER.md`, `docs/WALLET_PROVIDER.md`):

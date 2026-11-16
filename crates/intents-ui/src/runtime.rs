@@ -107,6 +107,43 @@ mod web {
         (js_sys::Date::now() / 1000.0) as u64
     }
 
+    /// This app's page URL without the fragment (the launch token stays out),
+    /// and its origin, as the Wallet bridge binds account access to them.
+    pub fn page_and_origin() -> (String, String) {
+        let location = window().location();
+        let origin = format!("{}//{}", location.protocol().unwrap_or_default(), location.host().unwrap_or_default());
+        (format!("{origin}{}", location.pathname().unwrap_or_default()), origin)
+    }
+
+    /// A same-origin call to one of the gateway's app routes (the Wallet
+    /// bridge): the reply's JSON on success, its text as the message otherwise.
+    pub async fn gateway(method: &str, path: &str, body: Option<&Value>, token: &str) -> Result<Value, ProviderError> {
+        let headers = Headers::new().map_err(|_| failed("headers"))?;
+        headers.set("content-type", "application/json").map_err(|_| failed("headers"))?;
+        headers.set("x-elastos-home-token", token).map_err(|_| failed("headers"))?;
+        let init = RequestInit::new();
+        init.set_method(method);
+        init.set_headers(&headers);
+        if let Some(body) = body {
+            init.set_body(&JsValue::from_str(&body.to_string()));
+        }
+        let request = Request::new_with_str_and_init(path, &init).map_err(|_| failed("The request could not be made."))?;
+        let response: Response = JsFuture::from(window().fetch_with_request(&request))
+            .await
+            .map_err(|_| failed("The Runtime did not answer."))?
+            .unchecked_into();
+        let text = JsFuture::from(response.text().map_err(|_| failed("unreadable reply"))?)
+            .await
+            .ok()
+            .and_then(|t| t.as_string())
+            .unwrap_or_default();
+        if !response.ok() {
+            let message = if text.trim().is_empty() { format!("The Runtime answered {}.", response.status()) } else { text };
+            return Err(ProviderError { code: response.status().to_string(), message });
+        }
+        serde_json::from_str(&text).map_err(|_| failed("The Runtime's reply was not JSON."))
+    }
+
     /// A plain HTML panel over the canvas for long text: the whole address,
     /// selected so ⌘C copies it (copying a selection needs no clipboard
     /// permission, which Home's sandbox withholds), or a field to paste into.
@@ -343,7 +380,7 @@ mod web {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{announce, ask_text, copy_text, format_time, home_token, listen_clipboard, now_secs, provider, query, show_text, sleep_ms};
+pub use web::{announce, ask_text, copy_text, format_time, gateway, home_token, listen_clipboard, now_secs, page_and_origin, provider, query, show_text, sleep_ms};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn home_token() -> Option<String> {
@@ -400,6 +437,16 @@ pub fn format_time(ms: u64) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn page_and_origin() -> (String, String) {
+    ("http://localhost:61180/apps/neptune-swap/".into(), "http://localhost:61180".into())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn gateway(_method: &str, _path: &str, _body: Option<&Value>, _token: &str) -> Result<Value, ProviderError> {
+    Err(ProviderError { code: String::new(), message: "Not in Home.".into() })
 }
 
 #[cfg(not(target_arch = "wasm32"))]

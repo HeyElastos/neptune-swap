@@ -708,6 +708,11 @@ export component AppWindow inherits Window {
     in property <string> price-note;
     callback show-prices();
     callback amounts-changed();
+    // The other chain's side: "" (nothing to say), "connect", "asking",
+    // "connected" or "info", with its line of text.
+    in property <string> other-leg-state;
+    in property <string> other-leg;
+    callback connect-wallet();
     changed give-amount => { root.amounts-changed(); }
     changed want-amount => { root.amounts-changed(); }
     changed give-index => { root.amounts-changed(); }
@@ -1082,6 +1087,19 @@ export component AppWindow inherits Window {
                                     options: ["5 min", "10 min", "30 min"];
                                     selected <=> root.ttl-index;
                                 }
+                            }
+                            if root.other-leg-state != "" && root.other-leg-state != "connect": Text {
+                                text: root.other-leg;
+                                color: Skin.muted;
+                                font-size: Ty.small;
+                                wrap: word-wrap;
+                            }
+                            if root.other-leg-state == "connect": Text {
+                                text: root.other-leg;
+                                color: Skin.accent-text;
+                                font-size: Ty.small;
+                                wrap: word-wrap;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.connect-wallet(); } }
                             }
                             if root.prices-state == "on" && root.price-note != "": Text {
                                 text: root.price-note;
