@@ -185,10 +185,19 @@ fn catch_up(wallet: &mut LightWallet, node: &dyn Node) -> Result<u64> {
 /// Proves the transaction (checking every lock and type script first) and
 /// hands it to the node.
 fn prove_and_submit(details: &light_core::neptune_wallet::transaction_details::TransactionDetails, node: &dyn Node) -> Result<()> {
+    submit_witness(details.primitive_witness(), details.network, node)
+}
+
+/// Proves an assembled primitive witness and hands the transaction to the node.
+fn submit_witness(
+    witness: light_core::neptune_consensus::transaction::primitive_witness::PrimitiveWitness,
+    network: Network,
+    node: &dyn Node,
+) -> Result<()> {
     let transaction = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(light_core::send::prove(details))?;
+        .block_on(light_core::send::prove_witness(witness, network))?;
     let rpc_transaction = light_core::neptune_rpc_api::model::wallet::transaction::RpcTransaction::try_from(transaction)
         .map_err(|e| anyhow::anyhow!(e))?;
     if !rpc::parse_submitted(&node.call(rpc::submit_transaction_request(rpc_transaction))?)? {

@@ -6,9 +6,10 @@
 //! so this is meant for the user's own node (the provider's loopback node).
 
 use anyhow::{bail, ensure, Context, Result};
-use neptune_consensus::consensus_rule_set::ConsensusRuleSet;
 use neptune_consensus::transaction::validity::proof_collection::ProofCollection;
+use neptune_consensus::transaction::primitive_witness::PrimitiveWitness;
 use neptune_consensus::transaction::{Transaction, TransactionProof};
+use neptune_primitives::network::Network;
 use neptune_consensus::type_scripts::native_currency_amount::NativeCurrencyAmount;
 use neptune_mutator_set::mutator_set_accumulator::MutatorSetAccumulator;
 use neptune_mutator_set::removal_record::absolute_index_set::AbsoluteIndexSet;
@@ -157,16 +158,48 @@ impl LightWallet {
     }
 }
 
+/// Checks a primitive witness the way proving will. Each lock script runs
+/// with the kernel's MAST hash as public input, as `ProofCollection` proves it
+/// (`PrimitiveWitness::validate` gives lock scripts the hash of the whole
+/// witness instead, which a script that reads the kernel, like the HTLC
+/// refund, can never satisfy), and must be the lock its coin names. Every other
+/// rule is `validate`'s, run on a copy whose lock scripts just halt.
+pub async fn check_witness(witness: &PrimitiveWitness) -> Result<()> {
+    use neptune_consensus::tasm_lib::triton_vm::prelude::{Program, PublicInput, VM};
+    use neptune_consensus::transaction::lock_script::LockScriptAndWitness;
+    use neptune_primitives::mast_hash::MastHash;
+
+    let scripts = &witness.lock_scripts_and_witnesses;
+    let coins = &witness.input_utxos.utxos;
+    ensure!(scripts.len() == coins.len(), "one lock script per input");
+    let kernel_hash = PublicInput::new(witness.kernel.mast_hash().reversed().values().to_vec());
+    for (i, (script, coin)) in scripts.iter().zip(coins).enumerate() {
+        ensure!(script.program.hash() == coin.lock_script_hash(), "input {i}: not the coin's lock script");
+        VM::run(script.program.clone(), kernel_hash.clone(), script.nondeterminism())
+            .map_err(|e| anyhow::anyhow!("input {i}: the lock script refuses the spend: {e}"))?;
+    }
+    let halt = Program::from_code("halt").expect("a program");
+    let mut rest = witness.clone();
+    rest.lock_scripts_and_witnesses = scripts.iter().map(|_| LockScriptAndWitness::new(halt.clone())).collect();
+    rest.validate().await.map_err(|e| anyhow::anyhow!("the transaction is not valid: {e:?}"))
+}
+
 /// The shareable transaction: its kernel and a proof that reveals no secret.
 /// Networks with mock proofs (regtest) get a mock proof collection.
 pub async fn prove(details: &TransactionDetails) -> Result<Transaction> {
-    details.validate().await.map_err(|e| anyhow::anyhow!("the transaction is not valid: {e:?}"))?;
-    let witness = details.primitive_witness();
-    let network = details.network;
+    prove_witness(details.primitive_witness(), details.network).await
+}
+
+/// Like [`prove`], for a primitive witness already assembled. Every call to
+/// `TransactionDetails::primitive_witness` rebuilds the kernel, with freshly
+/// encrypted UTXO notifications, so a witness that commits to its kernel (an
+/// HTLC refund proves the kernel's timestamp) is completed on one assembled
+/// witness and proven from it.
+pub async fn prove_witness(witness: PrimitiveWitness, network: Network) -> Result<Transaction> {
+    check_witness(&witness).await?;
     if !network.use_mock_proof() {
         bail!("proving on {network} is not built yet (ProofCollection with the Triton VM prover)");
     }
-    let _ = ConsensusRuleSet::infer_from(network, BlockHeight::from(0u64));
     let proof = ProofCollection::produce_mock(&witness, true);
     Ok(Transaction { kernel: witness.kernel, proof: TransactionProof::ProofCollection(proof) })
 }

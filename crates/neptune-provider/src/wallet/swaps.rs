@@ -16,7 +16,7 @@ use light_core::LightWallet;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{blocks, catch_up, prove_and_submit, Node, Wallets, BATCH};
+use super::{blocks, catch_up, prove_and_submit, submit_witness, Node, Wallets, BATCH};
 
 /// A lock this wallet gave.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -190,8 +190,8 @@ impl Wallets {
         let snapshot = rpc::parse_membership_snapshot(
             &node.call(rpc::restore_membership_proof_request(vec![LightWallet::htlc_index_set(note, at)]))?,
         )?;
-        let details = wallet.build_htlc_spend(note, at, spend, fee, snapshot, now_ms)?;
-        prove_and_submit(&details, node)
+        let witness = wallet.build_htlc_spend(note, at, spend, fee, snapshot, now_ms)?;
+        submit_witness(witness, wallet.network(), node)
     }
 }
 

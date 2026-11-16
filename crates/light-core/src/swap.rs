@@ -12,6 +12,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use htlc::{Htlc, Spend};
 use neptune_consensus::transaction::lock_script::LockScriptAndWitness;
+use neptune_consensus::transaction::primitive_witness::PrimitiveWitness;
 use neptune_consensus::transaction::transaction_kernel::TransactionKernelField;
 use neptune_consensus::transaction::utxo::Utxo;
 use neptune_mutator_set::addition_record::AdditionRecord;
@@ -162,6 +163,8 @@ impl LightWallet {
     }
 
     /// Spends a located lock to this wallet's receiving address, less `fee`.
+    /// Returns the assembled primitive witness (prove it with
+    /// `send::prove_witness`): a refund's witness commits to that kernel.
     pub fn build_htlc_spend(
         &self,
         note: &HtlcNote,
@@ -170,7 +173,7 @@ impl LightWallet {
         fee: &str,
         snapshot: RpcMsMembershipSnapshot,
         now_ms: u64,
-    ) -> Result<TransactionDetails> {
+    ) -> Result<PrimitiveWitness> {
         note.check()?;
         let htlc = note.htlc()?;
         if let HtlcSpend::Refund { .. } = spend {
@@ -206,15 +209,21 @@ impl LightWallet {
         };
         Ok(match spend {
             HtlcSpend::Claim { preimage, claim_index } => {
-                details_with(htlc.witness(&Spend::Claim { preimage, secret: self.swap_secret(claim_index) }))
+                details_with(htlc.witness(&Spend::Claim { preimage, secret: self.swap_secret(claim_index) })).primitive_witness()
             }
             HtlcSpend::Refund { refund_index } => {
-                // The witness proves the kernel's timestamp; the kernel does not
-                // depend on the witness, so build it once to read the path.
-                let draft = details_with(Default::default());
-                let kernel = draft.transaction_kernel();
-                let path = kernel.mast_path(TransactionKernelField::Timestamp);
-                details_with(htlc.witness(&Spend::Refund { timestamp: now_ms, path, secret: self.swap_secret(refund_index) }))
+                // The witness proves the kernel's timestamp. Assemble the
+                // witness once (each assembly re-encrypts the notifications, so
+                // the kernel differs), read the path from its kernel, then put
+                // the refund witness into that same object.
+                let mut witness = details_with(Default::default()).primitive_witness();
+                let path = witness.kernel.mast_path(TransactionKernelField::Timestamp);
+                let timestamp = witness.kernel.timestamp.to_millis();
+                witness.lock_scripts_and_witnesses[0] = LockScriptAndWitness::new_with_nondeterminism(
+                    htlc.program(),
+                    htlc.witness(&Spend::Refund { timestamp, path, secret: self.swap_secret(refund_index) }),
+                );
+                witness
             }
         })
     }
