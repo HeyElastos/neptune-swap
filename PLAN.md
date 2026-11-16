@@ -168,7 +168,7 @@ capsule" is the wallet's UI. Everything is developed against a local **regtest**
 | M5 | Send: membership proofs from the own node (`wallet_restoreMembershipProof`), `TransactionDetails` → `ProofCollection` (mock on regtest) → `wallet_submitTransaction` | **done on regtest** (2026-11-16): `wallet_send` paid 10 NPT + 0.05 fee to the node, mined in ~12 s; the wallet saw the spend and found its 14.95 change. Real `ProofCollection` proving (main net/testnet) not built |
 | M6 | Wallet screens in the capsule (Slint): address + QR, balance, history, send | **built**: create/back up/import, sync, balance, send (form → review → confirm), receive with Private (Generation) or Short (EC Hybrid, QR) addresses and New address, activity (received/sent/pending, block and time). Seen in the dev Home: balance 14.95 NPT after sync (2026-11-16); addresses, QR and activity verified on regtest through the provider (an EC Hybrid payment shows as such), not yet clicked through in Home |
 | M7 | Neptune HTLC lock/claim/refund in the provider (`crates/htlc`), swap-guard on the verified tip | **lock → claim and lock → refund done on regtest** (2026-11-16, release provider, two wallets): see "HTLC on regtest" below. swap-guard on the verified tip not wired yet; the capsule does not call the htlc ops yet (gateway list unchanged) |
-| M8 | Other leg through elastOS Wallet: the fork lets the capsule request `wallet`/`chain` approvals; EVM HTLC contract and Bitcoin HTLC script on their testnets | |
+| M8 | Other leg through elastOS Wallet: the fork lets the capsule request `wallet`/`chain` approvals; EVM HTLC contract and Bitcoin HTLC script on their testnets | **EVM contract done** (`contracts/htlc-evm`, 9 forge tests; `crates/evm-htlc` calldata/logs, 5 tests; `scripts/evm-htlc-local.sh` lock→claim and lock→refund on a local anvil chain with Base's chain id 8453). Not yet: the fork route for Wallet approvals, chain-provider pointed at the local chain in the dev Home, the NPT↔ETH flow. Bitcoin: not signable by elastOS Wallet in 2.0.1 |
 | M9 | Solver + transport over the carrier; end-to-end swap on regtest/testnets | |
 
 ## Order of work
@@ -244,6 +244,8 @@ What elastOS 2.0.1 offers (`docs/CHAIN_PROVIDER.md`, `docs/WALLET_PROVIDER.md`):
 - **App route:** the Browser app already has `/api/apps/browser/wallet/{request-transaction,
   read, broadcast-transaction, approvals/:id}`, gated by `require_runtime_wallet_authority(…,
   &[BROWSER_CAPSULE_ID])`. The fork can let `neptune-intents` use the same handlers.
+
+Tooling: Foundry 1.9.0 installed in `~/.foundry/bin` (2026-11-16; binaries verified against their sigstore attestations); solc 0.8.28 is fetched by forge. Local chain: `anvil --chain-id 8453 --port 8545 --host 127.0.0.1`.
 
 Plan: (1) an EVM HTLC contract (SHA-256 hash lock, claim to the claimer, refund after T) with
 tests on a local chain; (2) ABI encoding for lock/claim/refund in Rust; (3) the fork route so
