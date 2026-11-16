@@ -16,6 +16,8 @@ serde.workspace = true
 serde_json.workspace = true
 tasm-lib = "9.0.0"
 rand = "0.10"
+htlc = { path = "../htlc" }
+sha2 = "0.10"
 
 # Browser entropy for the two getrandom majors in the tree (k256/aes-gcm via
 # rand_core 0.6, and rand 0.10). Only the wasm32 build needs these switches.

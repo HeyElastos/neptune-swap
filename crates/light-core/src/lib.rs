@@ -12,6 +12,7 @@
 
 pub mod rpc;
 pub mod send;
+pub mod swap;
 pub mod tip;
 
 use std::collections::HashMap;
@@ -398,3 +399,5 @@ pub(crate) fn index_set_of(coin: &Coin) -> AbsoluteIndexSet {
 mod tests;
 #[cfg(test)]
 mod tip_tests;
+#[cfg(test)]
+mod swap_tests;

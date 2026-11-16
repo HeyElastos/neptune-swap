@@ -88,9 +88,23 @@ impl LightWallet {
     /// to a fresh change key, against the node's `snapshot` (membership
     /// proofs in the plan's order, and the mutator set they are valid for).
     pub fn build_payment(&mut self, to: &str, plan: &SpendPlan, snapshot: RpcMsMembershipSnapshot, now_ms: u64) -> Result<(TransactionDetails, Built)> {
+        let recipient = ReceivingAddress::from_bech32m(to.trim(), self.state.network).context("not an address for this network")?;
+        let height = BlockHeight::from(snapshot.synced_height);
+        let output = TxOutput::onchain_native_currency(
+            plan.amount,
+            self.entropy.generate_sender_randomness(height, recipient.privacy_digest()),
+            recipient,
+            false,
+        );
+        self.build_spend(plan, snapshot, output, now_ms)
+    }
+
+    /// Spends the plan's coins into `output` (worth `plan.amount`), with the
+    /// rest, less the fee, as change to the next Symmetric key.
+    pub(crate) fn build_spend(&mut self, plan: &SpendPlan, snapshot: RpcMsMembershipSnapshot, output: TxOutput, now_ms: u64) -> Result<(TransactionDetails, Built)> {
         let network = self.state.network;
-        let recipient = ReceivingAddress::from_bech32m(to.trim(), network).context("not an address for this network")?;
         ensure!(snapshot.membership_proofs.len() == plan.coins.len(), "the node returned the wrong number of membership proofs");
+        ensure!(output.native_currency_amount() == plan.amount, "the output does not carry the planned amount");
         let mutator_set: MutatorSetAccumulator = snapshot.synced_mutator_set.into();
         let height = BlockHeight::from(snapshot.synced_height);
 
@@ -110,12 +124,7 @@ impl LightWallet {
             inputs.push(UnlockedUtxo::unlock(coin.utxo, key.lock_script_and_witness(), membership));
         }
 
-        let mut outputs = vec![TxOutput::onchain_native_currency(
-            plan.amount,
-            self.entropy.generate_sender_randomness(height, recipient.privacy_digest()),
-            recipient,
-            false,
-        )];
+        let mut outputs = vec![output];
         let change = total + -(plan.amount + plan.fee);
         let mut change_text = "0".to_string();
         if change.is_positive() {
