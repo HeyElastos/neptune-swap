@@ -162,11 +162,11 @@ capsule" is the wallet's UI. Everything is developed against a local **regtest**
 | # | Milestone | State |
 |---|---|---|
 | M1 | Capsule served by an isolated elastOS 2.0.1 dev Home (`~/elastos-neptune-dev`, `scripts/install-dev-home.sh`) | served; the user creates the dev Home's passkey |
-| M2 | Runtime fork (`patches/elastos-runtime-v2.0.1-neptune.patch`): `neptune` scheme registered and routed to the capsule | written, building |
-| M3 | Local regtest neptune-core node from the vendored source, provider pointed at it | next |
-| M4 | Wallet in the provider: create/import seed, receive address, sync with light-core, balance; persisted state | next |
-| M5 | Send: membership proofs from the own node (`wallet_restoreMembershipProof`), `TransactionDetails` → `ProofCollection` (mock on regtest) → `wallet_submitTransaction` | |
-| M6 | Wallet screens in the capsule (Slint): address + QR, balance, history, send | |
+| M2 | Runtime fork (`patches/elastos-runtime-v2.0.1-neptune.patch`): `neptune` scheme registered and routed to the capsule | built (`the elastOS runtime checkout`, branch neptune-dev); not yet run against the dev Home |
+| M3 | Local regtest neptune-core node from the vendored source, provider pointed at it | **done**: `scripts/regtest-node.sh` (needs `--compose --guess --tx-proving-capability=singleproof --tx-proof-upgrading`, or blocks never carry the wallet's transactions) |
+| M4 | Wallet in the provider: create/import seed, receive address, sync with light-core, balance; persisted state | **done**, verified on regtest: received 25 NPT from the node |
+| M5 | Send: membership proofs from the own node (`wallet_restoreMembershipProof`), `TransactionDetails` → `ProofCollection` (mock on regtest) → `wallet_submitTransaction` | **done on regtest** (2026-11-16): `wallet_send` paid 10 NPT + 0.05 fee to the node, mined in ~12 s; the wallet saw the spend and found its 14.95 change. Real `ProofCollection` proving (main net/testnet) not built |
+| M6 | Wallet screens in the capsule (Slint): address + QR, balance, history, send | create/back up/import/sync/balance/receive/copy built; send form, history and QR not yet; not yet seen inside the dev Home (the user creates its passkey) |
 | M7 | Neptune HTLC lock/claim/refund in the provider (`crates/htlc`), swap-guard on the verified tip | |
 | M8 | Other leg through elastOS Wallet: the fork lets the capsule request `wallet`/`chain` approvals; EVM HTLC contract and Bitcoin HTLC script on their testnets | |
 | M9 | Solver + transport over the carrier; end-to-end swap on regtest/testnets | |

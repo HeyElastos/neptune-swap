@@ -15,6 +15,12 @@ use neptune_rpc_api::model::message::GetBlocksRequest;
 use neptune_rpc_api::model::message::GetBlocksResponse;
 use neptune_rpc_api::model::message::HeightResponse;
 use neptune_rpc_api::model::message::TipResponse;
+use neptune_rpc_api::model::message::RestoreMembershipProofRequest;
+use neptune_rpc_api::model::message::RestoreMembershipProofResponse;
+use neptune_rpc_api::model::message::SubmitTransactionRequest;
+use neptune_rpc_api::model::message::SubmitTransactionResponse;
+use neptune_rpc_api::model::wallet::mutator_set::RpcMsMembershipSnapshot;
+use neptune_rpc_api::model::wallet::transaction::RpcTransaction;
 use neptune_rpc_api::model::block::RpcBlock;
 use neptune_rpc_api::model::wallet::block::RpcWalletBlock;
 use neptune_mutator_set::removal_record::absolute_index_set::AbsoluteIndexSet;
@@ -50,6 +56,16 @@ pub fn get_blocks_request(from: u64, to: u64) -> String {
     )
 }
 
+/// Membership proofs for coins about to be spent, with the mutator set they
+/// are valid for. It tells the node which coins those are: own node only.
+pub fn restore_membership_proof_request(sets: Vec<AbsoluteIndexSet>) -> String {
+    body("wallet_restoreMembershipProof", RestoreMembershipProofRequest { absolute_index_sets: sets })
+}
+
+pub fn submit_transaction_request(transaction: RpcTransaction) -> String {
+    body("wallet_submitTransaction", SubmitTransactionRequest { transaction })
+}
+
 pub fn heights_by_flags_request(flags: Vec<AnnouncementFlag>) -> String {
     body("utxoindex_blockHeightsByFlags", BlockHeightsByFlagsRequest { announcement_flags: flags })
 }
@@ -80,6 +96,16 @@ pub fn parse_tip(response: &str) -> Result<RpcBlock> {
 
 pub fn parse_blocks(response: &str) -> Result<Vec<RpcWalletBlock>> {
     Ok(result::<GetBlocksResponse>(response)?.blocks)
+}
+
+pub fn parse_membership_snapshot(response: &str) -> Result<RpcMsMembershipSnapshot> {
+    Ok(result::<RestoreMembershipProofResponse>(response)?.snapshot)
+}
+
+/// The node checks the kernel only (fees, mutator set, timestamps); proofs are
+/// checked later by its peers, so a caller verifies its proof before sending.
+pub fn parse_submitted(response: &str) -> Result<bool> {
+    Ok(result::<SubmitTransactionResponse>(response)?.success)
 }
 
 pub fn parse_heights_by_flags(response: &str) -> Result<Vec<u64>> {

@@ -11,6 +11,7 @@
 //! for those, like neptune-wallet-app does.
 
 pub mod rpc;
+pub mod send;
 pub mod tip;
 
 use std::collections::HashMap;
@@ -45,7 +46,7 @@ pub const KEY_GAP: u64 = 25;
 
 /// The key types a seed receives on: Generation (the default address),
 /// Symmetric (change) and EC Hybrid (short addresses).
-const SCANNED_KEY_TYPES: [KeyType; 3] = [KeyType::Generation, KeyType::Symmetric, KeyType::EcHybrid];
+pub(crate) const SCANNED_KEY_TYPES: [KeyType; 3] = [KeyType::Generation, KeyType::Symmetric, KeyType::EcHybrid];
 
 /// A coin the seed owns, with what it takes to recognise its spend.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,6 +80,9 @@ pub struct WalletState {
     pub coins: Vec<Coin>,
     /// Number of keys derived per key type (indexed like `SCANNED_KEY_TYPES`).
     pub derived: [u64; 3],
+    /// The next Symmetric key index to send change to.
+    #[serde(default)]
+    pub next_change: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -147,7 +151,7 @@ impl LightWallet {
         let words: Vec<&str> = phrase.split_whitespace().collect();
         ensure!(words.len() == 18, "a Neptune seed phrase has 18 words, got {}", words.len());
         let entropy = WalletEntropy::from_phrase(words)?;
-        let state = WalletState { network, sync: None, coins: vec![], derived: [0; 3] };
+        let state = WalletState { network, sync: None, coins: vec![], derived: [0; 3], next_change: 0 };
         Self::with_state(entropy, state)
     }
 
@@ -169,7 +173,7 @@ impl LightWallet {
         Ok(w)
     }
 
-    fn derive_up_to(&mut self, wanted: [u64; 3]) {
+    pub(crate) fn derive_up_to(&mut self, wanted: [u64; 3]) {
         for (slot, key_type) in SCANNED_KEY_TYPES.into_iter().enumerate() {
             while self.state.derived[slot] < wanted[slot] {
                 let index = self.state.derived[slot];
@@ -363,8 +367,8 @@ impl LightWallet {
             .map(|c| c.utxo.get_native_currency_amount())
             .sum();
         Balance {
-            total: total.display_lossless(),
-            spendable: spendable.display_lossless(),
+            total: npt(total),
+            spendable: npt(spendable),
             total_nau: total.to_nau().to_string(),
             unspent_coins: unspent.len(),
             spent_coins: self.state.coins.len() - unspent.len(),
@@ -372,7 +376,16 @@ impl LightWallet {
     }
 }
 
-fn index_set_of(coin: &Coin) -> AbsoluteIndexSet {
+/// An amount in NPT without trailing zeros: "14.95", "25", "0".
+pub fn npt(amount: NativeCurrencyAmount) -> String {
+    let text = amount.display_lossless();
+    if !text.contains('.') {
+        return text;
+    }
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+pub(crate) fn index_set_of(coin: &Coin) -> AbsoluteIndexSet {
     AbsoluteIndexSet::compute(
         Tip5::hash(&coin.utxo),
         coin.sender_randomness,

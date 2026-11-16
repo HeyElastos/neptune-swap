@@ -94,7 +94,7 @@ fn receives_and_spends() {
     let b1 = block_after(&genesis, vec![theirs, mine], vec![], vec![their_note, note]);
     let r = w.apply_blocks(vec![rpc(&b1)]).unwrap();
     assert_eq!((r.received, r.spent), (1, 0));
-    assert_eq!(w.balance(u64::MAX).total, NativeCurrencyAmount::coins(7).display_lossless());
+    assert_eq!(w.balance(u64::MAX).total, "7");
 
     // The coin's AOCL index is where the mutator set put it.
     let coin = w.state().coins[0].clone();
@@ -109,7 +109,7 @@ fn receives_and_spends() {
     let r = w.apply_blocks(vec![rpc(&b2)]).unwrap();
     assert_eq!((r.received, r.spent), (1, 1));
     let b = w.balance(u64::MAX);
-    assert_eq!(b.total, NativeCurrencyAmount::coins(5).display_lossless());
+    assert_eq!(b.total, "5");
     assert_eq!((b.unspent_coins, b.spent_coins), (1, 1));
     assert_eq!(w.state().sync.unwrap().height, 2);
 }
@@ -165,7 +165,7 @@ fn state_round_trips_through_json_and_resume() {
     let json = serde_json::to_string(w.state()).unwrap();
     let state: WalletState = serde_json::from_str(&json).unwrap();
     let w2 = LightWallet::resume(PHRASE, state).unwrap();
-    assert_eq!(w2.balance(u64::MAX).total, NativeCurrencyAmount::coins(4).display_lossless());
+    assert_eq!(w2.balance(u64::MAX).total, "4");
     assert_eq!(w2.state().sync, w.state().sync);
     assert_eq!(w2.unspent_index_sets().len(), 1);
 }
@@ -201,4 +201,11 @@ fn real_blocks_chain_through_the_wallet() {
         assert_eq!(r.height, Some(start + n), "{file}");
         eprintln!("{file}: blocks {}..={} chain; {} inputs, {} announcements", start + 1, start + n, r.inputs, r.announcements);
     }
+}
+
+#[test]
+fn amounts_drop_trailing_zeros() {
+    assert_eq!(npt(NativeCurrencyAmount::coins(25)), "25");
+    assert_eq!(npt(NativeCurrencyAmount::coins_from_str("14.95").unwrap()), "14.95");
+    assert_eq!(npt(NativeCurrencyAmount::coins(0)), "0");
 }

@@ -59,6 +59,12 @@ enum Request {
     WalletBalance {
         network: String,
     },
+    WalletSend {
+        network: String,
+        to: String,
+        amount: String,
+        fee: String,
+    },
     Shutdown {},
 }
 
@@ -170,6 +176,9 @@ impl Provider {
             Request::WalletBalance { network } => {
                 self.wallet(&network, |w, n| w.wallets.balance(&n.id, n.chain, now_ms()))
             }
+            Request::WalletSend { network, to, amount, fee } => self.wallet(&network, |w, n| {
+                w.wallets.send(&n.id, n.chain, &to, &amount, &fee, now_ms(), &HttpNode(n.rpc))
+            }),
             Request::Shutdown {} => ok(None),
         }
     }

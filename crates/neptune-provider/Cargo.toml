@@ -11,6 +11,7 @@ serde_json.workspace = true
 ureq = { version = "2", default-features = false }
 light-core = { path = "../light-core" }
 anyhow.workspace = true
+tokio = { version = "1.47", features = ["rt"] }
 
 [dev-dependencies]
 flate2 = "1"

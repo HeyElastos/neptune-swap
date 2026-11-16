@@ -136,6 +136,44 @@ impl Wallets {
         }))
     }
 
+    /// Pays `amount` NPT (plus `fee`) to `to`: membership proofs from the
+    /// node, the transaction built and proven here, then submitted. The wallet
+    /// must be synced to the node's tip first.
+    pub fn send(&self, network_id: &str, network: Network, to: &str, amount: &str, fee: &str, now_ms: u64, node: &dyn Node) -> Result<Value> {
+        // Catch up first: a coin spent in a block the wallet has not seen
+        // would make the node refuse the transaction.
+        let mut wallet = self.load(network_id, network)?.context("no wallet")?;
+        let tip = rpc::parse_height(&node.call(rpc::height_request())?)?;
+        if tip.saturating_sub(wallet.state().sync.map_or(0, |s| s.height)) > SYNC_STEP {
+            bail!("the wallet is far behind the node; sync it first");
+        }
+        let start = wallet.state().sync.map_or(0, |s| s.height + 1);
+        let mut from = start;
+        while from <= tip {
+            let to = tip.min(from + BATCH - 1);
+            wallet.apply_blocks(blocks(node, from, to)?)?;
+            from = to + 1;
+        }
+        let plan = wallet.plan_spend(amount, fee, now_ms)?;
+        let snapshot = rpc::parse_membership_snapshot(
+            &node.call(rpc::restore_membership_proof_request(plan.index_sets.clone()))?,
+        )?;
+        let (details, built) = wallet.build_payment(to, &plan, snapshot, now_ms)?;
+        let transaction = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(light_core::send::prove(&details))?;
+        let rpc_transaction = light_core::neptune_rpc_api::model::wallet::transaction::RpcTransaction::try_from(transaction)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        if !rpc::parse_submitted(&node.call(rpc::submit_transaction_request(rpc_transaction))?)? {
+            bail!("the node did not accept the transaction");
+        }
+        // The change key index moved on; the spent coins show as spent once
+        // a block includes the transaction.
+        self.save_state(network_id, &wallet)?;
+        Ok(json!({ "sent": amount.trim(), "fee": fee.trim(), "inputs": built.inputs, "change": built.change }))
+    }
+
     pub fn balance(&self, network_id: &str, network: Network, now_ms: u64) -> Result<Value> {
         let wallet = self.load(network_id, network)?.context("no wallet")?;
         Ok(json!({
