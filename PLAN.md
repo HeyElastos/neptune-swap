@@ -76,6 +76,31 @@ short; later, bonds.
 script, the EVM precompile and Solana all have SHA-256, so one hashlock works against
 all of them.
 
+## Resume here (paused 2026-11-16 evening)
+
+State: everything committed in this repo; the runtime fork's changes live as an uncommitted
+diff on branch `neptune-dev` in `the elastOS runtime checkout` and are saved in
+`patches/elastos-runtime-v2.0.1-neptune.patch` (regenerate with `git diff` there).
+
+First, tomorrow:
+1. **Run the tests** over the last commits (they were still building at pause time):
+   `CARGO_NET_OFFLINE=true cargo test --release -p light-core -p neptune-provider -p intents-protocol -p intents-ui`,
+   and in the runtime fork `cargo test --release -p elastos-server neptune_swap`.
+2. **Rebuild and restart the dev Home**: `cargo build --release -p elastos-server --bin elastos`
+   in the fork, `scripts/build-intents-capsule.sh`, `scripts/install-dev-home.sh`, then
+   `scripts/dev-home.sh` (the dev Home was stopped by the rebuild, exit 75).
+3. **Check the manifest loads**: the app at http://localhost:61180/apps/neptune-swap/ (200),
+   and that Home lists it (the manifest gained methods; `CapsuleManifest::validate` runs at load).
+4. **Live tests in the dev Home** (the user unlocks it in the browser pane): Show USD prices
+   (approve in Home), Connect elastOS Wallet (Base), Show open offers, publish an offer on the
+   Offer page, then the carrier test between the gateway's node and the managed runtime's node
+   (`target/release/examples/carrier_probe`, see the M9 note).
+5. **Main-net send by the user** (small amount, fee 0.1) with the light node's own proofs.
+
+Next to build: answering takers' sealed requests from the app (solver side), the capsule's EVM
+leg calls through the Wallet bridge (Base/ESC in the protocol, not Ethereum main net), proof of
+work or a stake for public offers, reputation and a signed solver list, an encrypted seed.
+
 ## Current state (2026-11-16)
 
 First slice, built and tested:

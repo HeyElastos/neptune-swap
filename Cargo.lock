@@ -3104,7 +3104,9 @@ dependencies = [
 name = "intents-ui"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "console_error_panic_hook",
+ "ed25519-dalek",
  "getrandom 0.2.17",
  "intents-protocol",
  "js-sys",
@@ -3917,7 +3919,10 @@ name = "neptune-provider"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "ed25519-dalek",
  "flate2",
+ "intents-protocol",
  "light-core",
  "serde",
  "serde_json",
