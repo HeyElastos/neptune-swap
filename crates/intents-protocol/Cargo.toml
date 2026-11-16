@@ -13,6 +13,14 @@ bs58 = "0.5"
 base64 = "0.22"
 thiserror = "2"
 sha2 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
 hex = "0.4"
+
+# The capsule seals in the browser: rand_core's entropy comes from the page there.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }

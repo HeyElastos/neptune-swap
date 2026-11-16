@@ -40,6 +40,7 @@ mod canonical;
 mod did;
 mod error;
 mod message;
+mod seal;
 mod signed;
 
 #[cfg(test)]
@@ -50,6 +51,7 @@ pub use did::DidKey;
 pub use error::Error;
 pub use message::{may_reveal, other_refund_at, Accept, Amount, Asset, Chain, EvmLocked, Intent, Message, NptLocked, Quote, ASSETS};
 pub use signed::{decode, Decoded, Net, Signed};
+pub use seal::{open, seal, MAX_SEALED_BYTES};
 
 /// The protocol version every message carries in its `v` field.
 pub const PROTOCOL_VERSION: u16 = 2;
