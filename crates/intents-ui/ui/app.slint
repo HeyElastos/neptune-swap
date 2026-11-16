@@ -1,4 +1,4 @@
-// Neptune Swap. Hyper's tiers: the node is glanced at (a chip and its panel), the swap is
+// Neptune Swap. Three tiers: the node is glanced at (a chip and its panel), the swap is
 // the main area, the review is a sheet. Everything floats as frosted glass over the wallpaper.
 
 import { Skin, Look, Sp, Rad, Ty, Ctl, Motion } from "tokens.slint";
@@ -43,7 +43,7 @@ component Chevron inherits Path {
 }
 
 // A surface that answers the pointer: a clear rest lifts to the hover tint, a solid one steps
-// toward the ink (Hyper ui::hoverable).
+// toward the ink.
 component Pressable inherits Rectangle {
     callback clicked;
     in property <color> rest: transparent;
@@ -898,7 +898,7 @@ export component AppWindow inherits Window {
             }
 
             // The page scrolls under the bar when it is taller than the window (history, a phone).
-            // The lane is Hyper's Lay.card-max, 560.
+            // The lane is at most 560 wide.
             Flickable {
                 vertical-stretch: 1;
                 content-width: self.width;
@@ -1163,7 +1163,7 @@ export component AppWindow inherits Window {
         }
         Glass {
             property <bool> narrow: root.width < 480px;
-            // A reading surface: the tint denser than chrome (Hyper frost-dense, 94 %).
+            // A reading surface: the tint denser than chrome (94 %).
             tint: 0.94;
             // As wide as the card under it, so none of the form shows at its sides.
             width: self.narrow ? root.width : min(lane.width, root.width - 2 * Sp.l);

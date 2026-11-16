@@ -14,7 +14,7 @@ path = "src/main.rs"
 qrcode = { version = "0.14.1", default-features = false }
 intents-protocol = { path = "../intents-protocol" }
 serde_json.workspace = true
-# Same Slint as Hyper's web build: winit drawing with femtovg (WebGL2 on the web).
+# Slint drawing with winit and femtovg (WebGL2 on the web).
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "accessibility"] }
 tiny-skia = { version = "0.11", default-features = false, features = ["std"] }
 getrandom = { version = "0.2", features = ["js"] }

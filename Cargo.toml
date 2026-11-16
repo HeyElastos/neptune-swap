@@ -39,7 +39,7 @@ codegen-units = 1
 strip = true
 
 # Dependencies carry no debug info: smaller build dirs at no speed cost
-# (measured on the Hyper Slint workspace, 2026-10-30).
+# (measured 2026-10-30).
 [profile.dev.package."*"]
 debug = false
 # Triton VM proves and runs orders of magnitude faster optimised, even in tests.

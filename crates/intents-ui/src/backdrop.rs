@@ -1,6 +1,6 @@
 //! The wallpaper under the glass and its frost: Neptune's deep blue with soft light, its rings and
 //! a few stars, drawn once; then a blurred copy that every glass panel shows the part of behind
-//! it (Hyper's hyper_app_core::frost: downscale, then three box passes each way).
+//! it (downscale, then three box passes each way).
 
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 use tiny_skia::{
@@ -12,7 +12,7 @@ use tiny_skia::{
 const EDGE: u32 = 1200;
 /// The blurred copy's edge: the frost has no detail to lose and the panel scales it up.
 const FROST_EDGE: u32 = 160;
-/// Box radius at FROST_EDGE: about Hyper's 24 dp frost on a phone.
+/// Box radius at FROST_EDGE: about a 24 dp frost on a phone.
 const FROST_RADIUS: usize = 5;
 
 pub struct Backdrop {

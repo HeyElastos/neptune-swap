@@ -6,8 +6,7 @@
 //! key per message, HKDF-SHA256 over the shared secret with both public keys
 //! as salt and a domain string as info, ChaCha20-Poly1305 with the recipient's
 //! DID as associated data. A fresh ephemeral key gives each message its own
-//! key, so the nonce is fixed. Not post-quantum: a hybrid (as Hey's) is the
-//! next step.
+//! key, so the nonce is fixed. Not post-quantum: a hybrid is the next step.
 //!
 //! On the wire: `{"v":1,"to":"did:key:…","epk":"<b64url>","ct":"<b64url>"}`.
 

@@ -2,9 +2,9 @@
 
 **Neptune Swap** (renamed from Neptune Intents, user 2026-11-16; app id `neptune-swap`, was
 `neptune-intents`; the crypto domain tags keep `neptune-intents/…`, since swap secrets and
-signed/sealed messages depend on them). A private RFQ/swap app in the spirit of NEAR Intents, built as an elastOS capsule, with
-Neptune Cash as the settlement layer. This repo is its own project, separate from
-Hyper and hey-engine (decided 2026-10-29).
+signed/sealed messages depend on them). A private RFQ/swap app built as an elastOS capsule, with Neptune Cash as the settlement
+layer. All code here is this project's own, apart from the vendored neptune-core (patched),
+the elastOS runtime fork (a patch) and ordinary open-source crates.
 
 ## Goal
 
@@ -58,7 +58,7 @@ on the other chain first. If the NPT receiver held the secret it could take the 
 other side could never claim (found and fixed 2026-10-30; `intents-protocol` enforces it:
 the hash lock travels only in the NPT giver's message).
 
-1. Capsule creates the intent and seals it (hybrid PQ, like Hey) to 3–5 solver DIDs.
+1. Capsule creates the intent and seals it (hybrid PQ planned) to 3–5 solver DIDs.
 2. Solvers answer with DID-signed quotes; the user picks one. The NPT giver's message carries
    H = SHA-256(secret): the Accept if the user gives NPT, the Quote if the solver does.
 3. The NPT giver locks NPT in a Neptune HTLC lock script: claimable by the receiver with the
@@ -97,14 +97,14 @@ First slice, built and tested:
 - `capsules/neptune-provider/capsule.json`, `capsules/neptune-swap/capsule.json`:
   both pass the Runtime's own `CapsuleManifest::validate` (elastos-common).
 - `crates/intents-ui`: the capsule's UI in **Slint and Rust** (user 2026-10-30: write in Slint
-  and Rust as much as we can). Hyper's Modern design tokens (graphite/white, gold the only
-  accent) and Hyper's frosted glass: Rust draws a Neptune wallpaper and a blurred copy once
-  (tiny-skia, three box passes, like hyper_app_core::frost); each glass panel shows its part of
+  and Rust as much as we can). Design tokens (graphite/white, gold the only
+  accent) and frosted glass: Rust draws a Neptune wallpaper and a blurred copy once
+  (tiny-skia, three box passes); each glass panel shows its part of
   the frost under the sheet tint. The form builds the intent with `intents-protocol` itself
   (exact `Amount::parse_decimal`), so page and solvers share one rule set. Runtime calls, the
   Home launch token and the `home:app-ready` handshake are Rust (web-sys). 7 tests.
   - Capsule page: `scripts/build-intents-capsule.sh` builds wasm32 (Slint 1.18.1, winit +
-    femtovg on WebGL2, as Hyper's web build) into `capsules/neptune-swap/browser/pkg/`;
+    femtovg on WebGL2) into `capsules/neptune-swap/browser/pkg/`;
     `index.html` only starts the wasm. ~1.5 MB gzipped.
   - Screenshots: WebKit snapshots do not capture WebGL, so the native build saves the window
     with Slint's `take_snapshot`: `NEPTUNE_SWAP_LOOK=dark|light NEPTUNE_SWAP_DEMO=asset|node|review
@@ -355,5 +355,4 @@ refund before T refused → refund after T (giver 4.75 → 4.65). What this does
 - Proving tiers PrimitiveWitness / LockScript / ProofCollection / SingleProof:
   `neptune-consensus/src/proof_abstractions/tx_proving_capability.rs`.
 - tasm-lib hashing: Tip5 only, no SHA-256 (`tasm-lib/src/hashing/`).
-- Capsule I/O via `POST /api/provider/<scheme>/<op>` with capability tokens: hey-core
-  `src/runtime.rs`.
+- Capsule I/O via `POST /api/provider/<scheme>/<op>` with capability tokens (the Runtime's gateway provider proxy).
