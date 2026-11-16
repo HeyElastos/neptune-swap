@@ -152,6 +152,25 @@ Spike from 2026-10-28:
   release). Was v0.19.3 until 2026-11-16; upstream was newer (hardfork delta,
   transaction chaining): rebase before building anything on top.
 
+## Goal (user, 2026-11-16) and milestones
+
+A fully working Neptune wallet in the capsule, and swaps that run through that wallet and
+elastOS's own ETH/BTC/USDC wallet. Keys stay in the provider (rule 3): "wallet in the
+capsule" is the wallet's UI. Everything is developed against a local **regtest** node
+(mock proofs and PoW, no real money) in the isolated dev Home; main net only after review.
+
+| # | Milestone | State |
+|---|---|---|
+| M1 | Capsule served by an isolated elastOS 2.0.1 dev Home (`~/elastos-neptune-dev`, `scripts/install-dev-home.sh`) | served; the user creates the dev Home's passkey |
+| M2 | Runtime fork (`patches/elastos-runtime-v2.0.1-neptune.patch`): `neptune` scheme registered and routed to the capsule | written, building |
+| M3 | Local regtest neptune-core node from the vendored source, provider pointed at it | next |
+| M4 | Wallet in the provider: create/import seed, receive address, sync with light-core, balance; persisted state | next |
+| M5 | Send: membership proofs from the own node (`wallet_restoreMembershipProof`), `TransactionDetails` → `ProofCollection` (mock on regtest) → `wallet_submitTransaction` | |
+| M6 | Wallet screens in the capsule (Slint): address + QR, balance, history, send | |
+| M7 | Neptune HTLC lock/claim/refund in the provider (`crates/htlc`), swap-guard on the verified tip | |
+| M8 | Other leg through elastOS Wallet: the fork lets the capsule request `wallet`/`chain` approvals; EVM HTLC contract and Bitcoin HTLC script on their testnets | |
+| M9 | Solver + transport over the carrier; end-to-end swap on regtest/testnets | |
+
 ## Order of work
 
 1. **Protocol spec:** intent / quote / accept / status messages, encryption, signatures,
