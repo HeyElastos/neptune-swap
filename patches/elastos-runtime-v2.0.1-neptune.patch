@@ -11,8 +11,114 @@ index f96bcf74..3b71342f 100755
  ];
  
  /// Reserved names for provider targets that only Runtime invocation can reach.
+diff --git a/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs b/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs
+index 471b56d0..ea4591a2 100644
+--- a/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs
++++ b/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs
+@@ -59,7 +59,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_bridge(
+     headers: HeaderMap,
+ ) -> Response {
+     let authority =
+-        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
++        match require_runtime_wallet_authority(&state.data_dir, &headers, WALLET_BRIDGE_APPS) {
+             Ok(authority) => authority,
+             Err(err) => {
+                 return browser_wallet_cors_response(
+@@ -159,6 +159,11 @@ pub(in crate::api::gateway) struct BrowserWalletApprovalStatusQuery {
+ 
+ const BROWSER_ACCOUNT_ACCESS_TTL_SECS: u64 = 12 * 60 * 60;
+ 
++/// Local Neptune development fork: the apps that may use this EIP-1193 wallet
++/// bridge. Requests are bound to the app that made them (`requested_by_actor`
++/// is the launch token's actor), so one app cannot read or finish another's.
++const WALLET_BRIDGE_APPS: &[&str] = &[BROWSER_CAPSULE_ID, "neptune-intents"];
++
+ fn validate_browser_wallet_page_origin(
+     page_url: &str,
+     origin: &str,
+@@ -202,7 +207,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_signature(
+     Json(input): Json<BrowserWalletSignatureRequest>,
+ ) -> Response {
+     let authority =
+-        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
++        match require_runtime_wallet_authority(&state.data_dir, &headers, WALLET_BRIDGE_APPS) {
+             Ok(authority) => authority,
+             Err(err) => {
+                 return browser_wallet_cors_response(
+@@ -226,7 +231,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_accounts(
+     Json(input): Json<BrowserWalletAccountAccessRequest>,
+ ) -> Response {
+     let authority =
+-        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
++        match require_runtime_wallet_authority(&state.data_dir, &headers, WALLET_BRIDGE_APPS) {
+             Ok(authority) => authority,
+             Err(err) => {
+                 return browser_wallet_cors_response(
+@@ -249,7 +254,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_transaction(
+     Json(input): Json<BrowserWalletTransactionRequest>,
+ ) -> Response {
+     let authority =
+-        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
++        match require_runtime_wallet_authority(&state.data_dir, &headers, WALLET_BRIDGE_APPS) {
+             Ok(authority) => authority,
+             Err(err) => {
+                 return browser_wallet_cors_response(
+@@ -276,7 +281,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_read(
+     Json(input): Json<BrowserWalletReadRequest>,
+ ) -> Response {
+     let authority =
+-        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
++        match require_runtime_wallet_authority(&state.data_dir, &headers, WALLET_BRIDGE_APPS) {
+             Ok(authority) => authority,
+             Err(err) => {
+                 return browser_wallet_cors_response(
+@@ -299,7 +304,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_broadcast_transaction(
+     Json(input): Json<BrowserWalletBroadcastRequest>,
+ ) -> Response {
+     let authority =
+-        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
++        match require_runtime_wallet_authority(&state.data_dir, &headers, WALLET_BRIDGE_APPS) {
+             Ok(authority) => authority,
+             Err(err) => {
+                 return browser_wallet_cors_response(
+@@ -333,7 +338,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_approval_status(
+     Query(query): Query<BrowserWalletApprovalStatusQuery>,
+ ) -> Response {
+     let authority =
+-        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
++        match require_runtime_wallet_authority(&state.data_dir, &headers, WALLET_BRIDGE_APPS) {
+             Ok(authority) => authority,
+             Err(err) => {
+                 return browser_wallet_cors_response(
+@@ -975,7 +980,7 @@ fn bind_completed_browser_signature_caller(
+         ("principal_id", context.principal_id()),
+         ("session_id", context.session_id()),
+         ("launch_id", context.launch_id()),
+-        ("requested_by_actor", BROWSER_CAPSULE_ID),
++        ("requested_by_actor", context.actor()),
+     ] {
+         if request.get(field).and_then(|value| value.as_str()) != Some(expected) {
+             return Err((
+@@ -1036,7 +1041,7 @@ fn browser_account_access_request_payload<'a>(
+         ("principal_id", context.principal_id()),
+         ("session_id", context.session_id()),
+         ("launch_id", context.launch_id()),
+-        ("requested_by_actor", BROWSER_CAPSULE_ID),
++        ("requested_by_actor", context.actor()),
+     ] {
+         if request.get(field).and_then(|value| value.as_str()) != Some(expected) {
+             return Err((
+@@ -1283,7 +1288,7 @@ async fn browser_wallet_approval_status(
+                     .get("requested_by_actor")
+                     .or_else(|| request.get("capsule_id"))
+                     .and_then(|value| value.as_str())
+-                    == Some(BROWSER_CAPSULE_ID)
++                    == Some(authority.verified_context().actor())
+         })
+         .ok_or_else(|| {
+             (
 diff --git a/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs b/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
-index c6742ea3..6418b92f 100644
+index c6742ea3..e3982417 100644
 --- a/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
 +++ b/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
 @@ -1602,6 +1602,9 @@ pub(super) async fn gateway_library_events_stream(
@@ -34,7 +140,7 @@ index c6742ea3..6418b92f 100644
 +        "neptune" => match op.as_str() {
 +            "networks" | "status" | "wallet_status" | "wallet_create" | "wallet_import"
 +            | "wallet_receive" | "wallet_sync" | "wallet_balance" | "wallet_send"
-+            | "wallet_addresses" | "wallet_new_address" | "wallet_history" => {
++            | "wallet_addresses" | "wallet_new_address" | "wallet_history" | "wallet_send_status" => {
 +                &[NEPTUNE_INTENTS_CAPSULE_ID]
 +            }
 +            _ => {
