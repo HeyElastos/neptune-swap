@@ -1,9 +1,10 @@
 //! Paying from the wallet: choose coins, unlock them, build the transaction and
-//! its proof. The caller fetches the coins' membership proofs from its node
-//! (`wallet_restoreMembershipProof`) and submits the result.
+//! its proof, against a `SpendBasis`: the wallet's own membership proofs
+//! (kept block by block) or, for coins without one, the node's
+//! (`wallet_restoreMembershipProof`).
 //!
 //! Asking a node for membership proofs tells it which coins are being spent,
-//! so this is meant for the user's own node (the provider's loopback node).
+//! so the wallet's own proofs are used whenever every planned coin has one.
 
 use anyhow::{bail, ensure, Context, Result};
 use neptune_consensus::consensus_rule_set::ConsensusRuleSet;
@@ -12,6 +13,7 @@ use neptune_consensus::transaction::primitive_witness::PrimitiveWitness;
 use neptune_consensus::transaction::{Transaction, TransactionProof};
 use neptune_primitives::network::Network;
 use neptune_consensus::type_scripts::native_currency_amount::NativeCurrencyAmount;
+use neptune_mutator_set::ms_membership_proof::MsMembershipProof;
 use neptune_mutator_set::mutator_set_accumulator::MutatorSetAccumulator;
 use neptune_mutator_set::removal_record::absolute_index_set::AbsoluteIndexSet;
 use neptune_primitives::block_height::BlockHeight;
@@ -32,6 +34,16 @@ pub struct SpendPlan {
     pub index_sets: Vec<AbsoluteIndexSet>,
     pub amount: NativeCurrencyAmount,
     pub fee: NativeCurrencyAmount,
+}
+
+/// What a spend is built against: the mutator set after some block, and each
+/// planned coin's membership proof in it (in the plan's order).
+pub struct SpendBasis {
+    pub mutator_set: MutatorSetAccumulator,
+    pub height: u64,
+    pub proofs: Vec<MsMembershipProof>,
+    /// True when the proofs are the wallet's own: no node learned the coins.
+    pub own: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -78,6 +90,41 @@ impl LightWallet {
         Ok(SpendPlan { coins: chosen, index_sets, amount, fee })
     }
 
+    /// The wallet's own basis for `plan`, when it keeps the mutator set and
+    /// every planned coin has a proof of its own.
+    pub fn own_basis(&self, plan: &SpendPlan) -> Option<SpendBasis> {
+        let mutator_set = self.state.mutator_set.clone()?;
+        let height = self.state.sync?.height;
+        let proofs = plan
+            .coins
+            .iter()
+            .map(|&i| self.state.coins[i].membership_proof.clone())
+            .collect::<Option<Vec<_>>>()?;
+        Some(SpendBasis { mutator_set, height, proofs, own: true })
+    }
+
+    /// A basis from the node's `snapshot` for `plan`'s index sets.
+    pub fn node_basis(&self, plan: &SpendPlan, snapshot: RpcMsMembershipSnapshot) -> Result<SpendBasis> {
+        ensure!(snapshot.membership_proofs.len() == plan.coins.len(), "the node returned the wrong number of membership proofs");
+        let proofs = plan
+            .coins
+            .iter()
+            .zip(snapshot.membership_proofs)
+            .map(|(&i, proof)| {
+                let coin = &self.state.coins[i];
+                proof
+                    .extract_ms_membership_proof(coin.aocl_index, coin.sender_randomness, coin.receiver_preimage)
+                    .context("the node's membership proof does not cover the coin")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(SpendBasis {
+            mutator_set: snapshot.synced_mutator_set.into(),
+            height: snapshot.synced_height.value(),
+            proofs,
+            own: false,
+        })
+    }
+
     fn spending_key(&self, coin: &Coin) -> Result<SpendingKey> {
         let key_type = SCANNED_KEY_TYPES
             .into_iter()
@@ -87,40 +134,37 @@ impl LightWallet {
     }
 
     /// The transaction for `plan`, paying `to` (bech32m) and returning change
-    /// to a fresh change key, against the node's `snapshot` (membership
-    /// proofs in the plan's order, and the mutator set they are valid for).
-    pub fn build_payment(&mut self, to: &str, plan: &SpendPlan, snapshot: RpcMsMembershipSnapshot, now_ms: u64) -> Result<(TransactionDetails, Built)> {
+    /// to a fresh change key, against `basis`.
+    pub fn build_payment(&mut self, to: &str, plan: &SpendPlan, basis: SpendBasis, now_ms: u64) -> Result<(TransactionDetails, Built)> {
         let recipient = ReceivingAddress::from_bech32m(to.trim(), self.state.network).context("not an address for this network")?;
-        let height = BlockHeight::from(snapshot.synced_height);
+        let height = BlockHeight::from(basis.height);
         let output = TxOutput::onchain_native_currency(
             plan.amount,
             self.entropy.generate_sender_randomness(height, recipient.privacy_digest()),
             recipient,
             false,
         );
-        self.build_spend(plan, snapshot, output, now_ms)
+        self.build_spend(plan, basis, output, now_ms)
     }
 
     /// Spends the plan's coins into `output` (worth `plan.amount`), with the
     /// rest, less the fee, as change to the next Symmetric key.
-    pub(crate) fn build_spend(&mut self, plan: &SpendPlan, snapshot: RpcMsMembershipSnapshot, output: TxOutput, now_ms: u64) -> Result<(TransactionDetails, Built)> {
+    pub(crate) fn build_spend(&mut self, plan: &SpendPlan, basis: SpendBasis, output: TxOutput, now_ms: u64) -> Result<(TransactionDetails, Built)> {
         let network = self.state.network;
-        ensure!(snapshot.membership_proofs.len() == plan.coins.len(), "the node returned the wrong number of membership proofs");
+        ensure!(basis.proofs.len() == plan.coins.len(), "wrong number of membership proofs");
         ensure!(output.native_currency_amount() == plan.amount, "the output does not carry the planned amount");
-        let mutator_set: MutatorSetAccumulator = snapshot.synced_mutator_set.into();
-        let height = BlockHeight::from(snapshot.synced_height);
+        let mutator_set = basis.mutator_set;
+        let height = BlockHeight::from(basis.height);
+        let source = if basis.own { "the wallet's own" } else { "the node's" };
 
         let mut inputs = vec![];
         let mut total = NativeCurrencyAmount::coins(0);
-        for (&i, proof) in plan.coins.iter().zip(snapshot.membership_proofs) {
+        for (&i, membership) in plan.coins.iter().zip(basis.proofs) {
             let coin = self.state.coins[i].clone();
             let key = self.spending_key(&coin)?;
-            let membership = proof
-                .extract_ms_membership_proof(coin.aocl_index, coin.sender_randomness, coin.receiver_preimage)
-                .context("the node's membership proof does not cover the coin")?;
             ensure!(
                 mutator_set.verify(neptune_consensus::tasm_lib::prelude::Tip5::hash(&coin.utxo), &membership),
-                "a membership proof from the node does not verify"
+                "a membership proof ({source}) does not verify"
             );
             total = total + coin.utxo.get_native_currency_amount();
             inputs.push(UnlockedUtxo::unlock(coin.utxo, key.lock_script_and_witness(), membership));

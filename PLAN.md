@@ -216,9 +216,8 @@ this project, and what it does not:
   checkpoint, read from wallet.neptunefundamentals.org (only block at that height, equal to
   62,500's parent): confirm it against an own node. Real tip 62,981: 1.46 s natively;
   in the browser (wasm, `scripts/build-tip-bench.sh`) 1.6 s the first time, then ~120 ms.
-  A changed proof, PoW root, parent, clock or network fails (6 tests). Not yet used by
-  the wallet scan or swap-guard. A light client must also compare `work_since_activation`
-  across the tips it sees to pick the heaviest chain.
+  A changed proof, PoW root, parent, clock or network fails (6 tests). Used by the wallet
+  sync (see "Light node" below); not yet by swap-guard.
 - **Not succinct asset management.** A wallet still has to find its coins (scan blocks, or
   the UTXO index, which reveals them) and keep membership proofs current (process each block
   while online, ask an archival node, or download the blocks it missed). Neptune's docs call
@@ -227,6 +226,34 @@ this project, and what it does not:
   it could check the lock's block against the tip's block MMR (an MMR membership proof of
   that block's hash) and the lock's addition record against that block: the receiver would
   then trust no node for the lock it checks. Not built.
+
+## Light node (2026-11-16)
+
+The provider is a light node over any node (the public one on main net, behind the dev flag):
+it trusts the node neither for validity nor with which coins are the user's.
+
+1. **Tip verified on every sync** (commit 5abcdce). When `wallet_sync` reaches the tip on
+   main net, it fetches that block with its proof (`archival_getBlock`) and its parent and
+   runs `verify_tip`; every block applied links to it by hash, so a valid tip vouches for
+   all of them. The work must not fall below an earlier verified tip. `wallet_sync` returns
+   `verified_height`; the capsule shows "Up to date at block N; its chain proof checked
+   here." Main net block 63,002 verified in ~3 s. Testnet/regtest: no checkpoint, not verified.
+2. **Own membership proofs.** `WalletState.mutator_set` is the mutator set after the synced
+   block; each `Coin.membership_proof` is kept current block by block
+   (`LightWallet::advance_proofs`: proof made at the coin's turn among the block's additions,
+   then `AuthenticatedItem`/`RemovalRecord::batch_update_from_addition` per addition, then the
+   removals), and the result must equal the block's own mutator set, or every proof is
+   dropped (fallback). A wallet without the set (old state, a bare sync point) takes it from
+   the next block, or the provider's sync adopts it at the sync point; create/import start
+   with it (`start_at`). `wallet_send` uses `own_basis` when every planned coin has a proof,
+   else asks the node (`wallet_restoreMembershipProof`) as before, and says which (`proofs`:
+   `own`/`node`). Tests: proofs hold through receipts, others' blocks and a real removal
+   record, and through JSON. Regtest end to end: a fresh wallet received 3, paid 1 (one
+   input) and 2.5 (two inputs) with its own proofs, both mined.
+
+Left: HTLC lock/claim still use the node's proofs; the swap-guard check against the verified
+tip's block MMR; comparing `work_since_activation` across nodes to pick the heaviest chain;
+a coin received before the wallet kept the set still asks the node once.
 
 ## M8 design: the other leg through elastOS Wallet (read from runtime v2.0.1)
 

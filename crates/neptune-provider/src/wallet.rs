@@ -115,7 +115,7 @@ impl Wallets {
         let phrase = light_core::new_phrase().join(" ");
         let mut wallet = LightWallet::from_phrase(&phrase, network)?;
         let tip = tip_block(node)?;
-        wallet.set_sync_point(LightWallet::sync_point_of(&tip));
+        wallet.start_at(&tip)?;
         self.create_files(network_id, &phrase, &wallet)?;
         Ok(json!({ "phrase": phrase, "address": wallet.receiving_address()? }))
     }
@@ -128,7 +128,7 @@ impl Wallets {
         if from_height > 0 {
             let before = blocks(node, from_height - 1, from_height - 1)?;
             let block = before.first().context("the node has no block before that height")?;
-            wallet.set_sync_point(LightWallet::sync_point_of(block));
+            wallet.start_at(block)?;
         }
         self.create_files(network_id, &phrase, &wallet)?;
         Ok(json!({ "address": wallet.receiving_address()? }))
@@ -142,6 +142,13 @@ impl Wallets {
     /// Applies up to `SYNC_STEP` blocks after the sync point.
     pub fn sync(&self, network_id: &str, network: Network, node: &dyn Node) -> Result<Value> {
         let mut wallet = self.load(network_id, network)?.context("no wallet")?;
+        // A wallet saved before it kept its own membership proofs: take the
+        // mutator set at its sync point, so proofs are kept from here on.
+        if let (None, Some(point)) = (wallet.state().mutator_set.as_ref(), wallet.state().sync) {
+            if let Some(block) = blocks(node, point.height, point.height)?.into_iter().next() {
+                wallet.adopt_mutator_set(&block)?;
+            }
+        }
         let tip = rpc::parse_height(&node.call(rpc::height_request())?)?;
         let start = wallet.state().sync.map_or(0, |s| s.height + 1);
         let end = tip.min(start.saturating_add(SYNC_STEP - 1));
@@ -179,21 +186,26 @@ impl Wallets {
         }))
     }
 
-    /// Pays `amount` NPT (plus `fee`) to `to`: membership proofs from the
-    /// node, the transaction built and proven here, then submitted. The wallet
-    /// must be synced to the node's tip first.
+    /// Pays `amount` NPT (plus `fee`) to `to`: the wallet's own membership
+    /// proofs (the node's only for coins without one), the transaction built
+    /// and proven here, then submitted. The wallet is synced to the tip first.
     pub fn send(&self, network_id: &str, network: Network, to: &str, amount: &str, fee: &str, now_ms: u64, node: &dyn Node) -> Result<Value> {
         let mut wallet = self.load(network_id, network)?.context("no wallet")?;
         catch_up(&mut wallet, node)?;
         let plan = wallet.plan_spend(amount, fee, now_ms)?;
-        let snapshot = rpc::parse_membership_snapshot(
-            &node.call(rpc::restore_membership_proof_request(plan.index_sets.clone()))?,
-        )?;
+        let basis = match wallet.own_basis(&plan) {
+            Some(own) => own,
+            None => wallet.node_basis(
+                &plan,
+                rpc::parse_membership_snapshot(&node.call(rpc::restore_membership_proof_request(plan.index_sets.clone()))?)?,
+            )?,
+        };
+        let proofs = if basis.own { "own" } else { "node" };
         let mut jobs = self.jobs.lock().map_err(|_| anyhow::anyhow!("jobs lock"))?;
         if jobs.values().any(|j| j.network_id == network_id && matches!(*j.state.lock().unwrap(), JobState::Proving)) {
             bail!("a payment is still being proven; wait for it first");
         }
-        let (details, built) = wallet.build_payment(to, &plan, snapshot, now_ms)?;
+        let (details, built) = wallet.build_payment(to, &plan, basis, now_ms)?;
         // The change key index moved on: keep it, so no later payment reuses it.
         self.save_state(network_id, &wallet)?;
 
@@ -208,9 +220,9 @@ impl Wallets {
                 Err(e) => JobState::Failed(format!("{e:#}")),
             };
         });
-        let reply = json!({ "sent": amount.trim(), "fee": fee.trim(), "inputs": built.inputs, "change": built.change });
+        let reply = json!({ "sent": amount.trim(), "fee": fee.trim(), "inputs": built.inputs, "change": built.change, "proofs": proofs });
         jobs.insert(id.clone(), Job { network_id: network_id.to_string(), state, pending: wallet.pending_for(&plan, now_ms), reply });
-        Ok(json!({ "job": id, "state": "proving" }))
+        Ok(json!({ "job": id, "state": "proving", "proofs": proofs }))
     }
 
     /// Where a payment job stands: "proving", "sent" (with what was sent) or

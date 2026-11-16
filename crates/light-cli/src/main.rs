@@ -45,10 +45,14 @@ fn main() -> Result<()> {
 
     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64;
     let plan = wallet.plan_spend(amount, fee, now_ms)?;
-    let snapshot = rpc::parse_membership_snapshot(&call(node, rpc::restore_membership_proof_request(plan.index_sets.clone()))?)?;
+    let basis = match wallet.own_basis(&plan) {
+        Some(own) => own,
+        None => wallet.node_basis(&plan, rpc::parse_membership_snapshot(&call(node, rpc::restore_membership_proof_request(plan.index_sets.clone()))?)?)?,
+    };
+    let proofs = if basis.own { "own" } else { "node's" };
     let me = wallet.receiving_address()?;
-    let (details, built) = wallet.build_payment(&me, &plan, snapshot, now_ms)?;
-    println!("built: {} input(s), {} NPT change; proving as {prove_as}", built.inputs, built.change);
+    let (details, built) = wallet.build_payment(&me, &plan, basis, now_ms)?;
+    println!("built: {} input(s), {} NPT change, {proofs} membership proofs; proving as {prove_as}", built.inputs, built.change);
 
     let started = Instant::now();
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;

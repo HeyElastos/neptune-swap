@@ -311,7 +311,8 @@ async fn sync(weak: Weak<AppWindow>, page: Shared) {
             Ok(step) => {
                 let (height, tip) = (step["synced_height"].as_u64(), step["tip"].as_u64().unwrap_or_default());
                 if let Some(app) = weak.upgrade() {
-                    app.set_wallet_sync_label(sync_label(height, tip, step["done"] == true).into());
+                    let verified = height.is_some() && step["verified_height"].as_u64() == height;
+                    app.set_wallet_sync_label(sync_label(height, tip, step["done"] == true, verified).into());
                 }
                 if step["done"] == true {
                     break;
@@ -528,9 +529,12 @@ fn show_address(weak: &Weak<AppWindow>, page: &Shared, address: &str) {
     }
 }
 
-pub(crate) fn sync_label(height: Option<u64>, tip: u64, done: bool) -> String {
+/// `verified`: this wallet checked the chain proof of the block it is at.
+pub(crate) fn sync_label(height: Option<u64>, tip: u64, done: bool, verified: bool) -> String {
     let at = height.map_or("the start".to_string(), |h| format!("block {}", crate::group_thousands(h)));
-    if done {
+    if done && verified {
+        format!("Up to date at {at}; its chain proof checked here.")
+    } else if done {
         format!("Up to date at {at}.")
     } else {
         format!("Syncing: {at} of {}.", crate::group_thousands(tip))
@@ -616,7 +620,7 @@ fn demo_state(app: &AppWindow, state: &str) {
             app.set_wallet_state("ready".into());
             app.set_wallet_balance("12.5".into());
             app.set_wallet_spendable("10 NPT spendable now; the rest is time-locked.".into());
-            app.set_wallet_sync_label(sync_label(Some(62_981), 62_981, true).into());
+            app.set_wallet_sync_label(sync_label(Some(62_981), 62_981, true, true).into());
             app.set_wallet_address_short(shorten(&format!("nolgam1{}", "q".repeat(3000))).into());
             let rows = demo_activity();
             show_activity(app, &rows);
@@ -696,8 +700,9 @@ mod tests {
 
     #[test]
     fn sync_labels_read_well() {
-        assert_eq!(sync_label(Some(1_500), 62_981, false), "Syncing: block 1,500 of 62,981.");
-        assert_eq!(sync_label(Some(62_981), 62_981, true), "Up to date at block 62,981.");
-        assert_eq!(sync_label(None, 10, false), "Syncing: the start of 10.");
+        assert_eq!(sync_label(Some(1_500), 62_981, false, false), "Syncing: block 1,500 of 62,981.");
+        assert_eq!(sync_label(Some(62_981), 62_981, true, false), "Up to date at block 62,981.");
+        assert_eq!(sync_label(Some(62_981), 62_981, true, true), "Up to date at block 62,981; its chain proof checked here.");
+        assert_eq!(sync_label(None, 10, false, false), "Syncing: the start of 10.");
     }
 }

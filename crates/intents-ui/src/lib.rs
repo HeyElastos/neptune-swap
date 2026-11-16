@@ -93,7 +93,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
 #[cfg(not(target_arch = "wasm32"))]
 fn shot_and_quit(app: &AppWindow, path: String) {
     let weak = app.as_weak();
-    slint::Timer::single_shot(std::time::Duration::from_millis(900), move || {
+    slint::Timer::single_shot(std::time::Duration::from_millis(1400), move || {
         let app = weak.unwrap();
         let saved = app.window().take_snapshot().map_err(|e| e.to_string()).and_then(|shot| {
             let size = tiny_skia::IntSize::from_wh(shot.width(), shot.height()).ok_or("empty window")?;

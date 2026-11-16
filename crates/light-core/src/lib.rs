@@ -24,7 +24,12 @@ use anyhow::Result;
 use neptune_consensus::block::block_kernel::BlockKernel;
 use neptune_consensus::transaction::utxo::Utxo;
 use neptune_consensus::type_scripts::native_currency_amount::NativeCurrencyAmount;
+use neptune_mutator_set::authenticated_item::AuthenticatedItem;
+use tasm_lib::twenty_first::util_types::mmr::mmr_trait::Mmr;
+use neptune_mutator_set::ms_membership_proof::MsMembershipProof;
+use neptune_mutator_set::mutator_set_accumulator::MutatorSetAccumulator;
 use neptune_mutator_set::removal_record::absolute_index_set::AbsoluteIndexSet;
+use neptune_mutator_set::removal_record::RemovalRecord;
 use neptune_primitives::announcement_flag::AnnouncementFlag;
 use neptune_primitives::network::Network;
 use neptune_primitives::timestamp::Timestamp;
@@ -70,6 +75,10 @@ pub struct Coin {
     pub received_ms: u64,
     #[serde(default)]
     pub spent_ms: Option<u64>,
+    /// This wallet's own mutator-set membership proof, kept current block by
+    /// block, so spending need not ask a node (which would learn the coin).
+    #[serde(default)]
+    pub membership_proof: Option<MsMembershipProof>,
 }
 
 /// The last block applied.
@@ -102,6 +111,10 @@ pub struct WalletState {
     /// served it.
     #[serde(default)]
     pub verified: Option<VerifiedPoint>,
+    /// The mutator set after the synced block, tracked here so the coins'
+    /// membership proofs can follow it. None until the wallet knows it.
+    #[serde(default)]
+    pub mutator_set: Option<MutatorSetAccumulator>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -126,6 +139,9 @@ pub struct Balance {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ApplyReport {
+    /// Set when this wallet stopped keeping its own membership proofs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proofs_dropped: Option<String>,
     pub blocks: u64,
     pub announcements: u64,
     pub inputs: u64,
@@ -179,7 +195,7 @@ impl LightWallet {
         let words: Vec<&str> = phrase.split_whitespace().collect();
         ensure!(words.len() == 18, "a Neptune seed phrase has 18 words, got {}", words.len());
         let entropy = WalletEntropy::from_phrase(words)?;
-        let state = WalletState { network, sync: None, coins: vec![], derived: [0; 3], next_change: 0, issued: [0; 2], pending: vec![], verified: None };
+        let state = WalletState { network, sync: None, coins: vec![], derived: [0; 3], next_change: 0, issued: [0; 2], pending: vec![], verified: None, mutator_set: Some(MutatorSetAccumulator::default()) };
         Self::with_state(entropy, state)
     }
 
@@ -269,10 +285,31 @@ impl LightWallet {
         Ok(point)
     }
 
+    /// Start after `block` (a new wallet at the tip, or a restore before its
+    /// first payment), with the mutator set after it, so membership proofs can
+    /// be kept from the first coin on.
+    pub fn start_at(&mut self, block: &RpcWalletBlock) -> Result<()> {
+        self.state.sync = Some(Self::sync_point_of(block));
+        self.adopt_mutator_set(block)
+    }
+
+    /// Takes the mutator set after `block`, which must be the synced block
+    /// (for wallets saved before membership proofs were kept here).
+    pub fn adopt_mutator_set(&mut self, block: &RpcWalletBlock) -> Result<()> {
+        let hash = block.hash();
+        ensure!(self.state.sync.map(|s| s.hash) == Some(hash), "not the synced block");
+        let kernel: BlockKernel = block.kernel.clone().into();
+        let guesser = kernel.guesser_fee_addition_records(hash).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        self.state.mutator_set = Some(kernel.body.mutator_set_accumulator_after(guesser));
+        Ok(())
+    }
+
     /// Start syncing after `point` instead of from genesis (a new wallet
     /// starts at the tip; a restore at a block before its first payment).
     pub fn set_sync_point(&mut self, point: SyncPoint) {
         self.state.sync = Some(point);
+        // The mutator set there is unknown: no proofs kept until adopted.
+        self.state.mutator_set = None;
     }
 
     /// The flags fast restore sends to the node's UTXO index. Revealing them
@@ -385,6 +422,7 @@ impl LightWallet {
                         spent_height: None,
                         received_ms: time_ms,
                         spent_ms: None,
+                        membership_proof: None,
                     });
                     self.by_index_set.insert(index_set_hash, self.state.coins.len() - 1);
                     report.received += 1;
@@ -402,7 +440,103 @@ impl LightWallet {
         report.spent += self.mark_spends(tx.inputs.iter().map(|rr| &rr.absolute_indices), height, time_ms);
 
         if in_order {
+            let kept = match self.state.mutator_set.take() {
+                Some(mut msa) => match self.advance_proofs(&mut msa, &kernel, hash, height) {
+                    Ok(()) => Some(msa),
+                    Err(e) => {
+                        // Never keep a proof that might be wrong: those coins
+                        // fall back to asking the node when spent.
+                        report.proofs_dropped = Some(format!("{e:#}"));
+                        for coin in &mut self.state.coins {
+                            coin.membership_proof = None;
+                        }
+                        None
+                    }
+                },
+                None => None,
+            };
+            // Without a kept set, take this block's: coins from the next
+            // block on get proofs of their own.
+            self.state.mutator_set = match kept {
+                Some(msa) => Some(msa),
+                None => kernel
+                    .guesser_fee_addition_records(hash)
+                    .ok()
+                    .map(|g| kernel.body.mutator_set_accumulator_after(g)),
+            };
             self.state.sync = Some(SyncPoint { height, hash });
+        }
+        Ok(())
+    }
+
+    /// Carries the mutator set and every unspent coin's membership proof
+    /// through `kernel`'s block, creating the proof of each coin received in
+    /// it at its turn among the additions. The result must equal the block's
+    /// own mutator set.
+    fn advance_proofs(&mut self, msa: &mut MutatorSetAccumulator, kernel: &BlockKernel, hash: Digest, height: u64) -> Result<()> {
+        let network = self.state.network;
+        let update = kernel.mutator_set_update(hash, network).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        ensure!(
+            msa.aocl.num_leafs() == kernel.body.num_aocl_leafs_prior(),
+            "the kept mutator set is not the one before block {height}"
+        );
+        let new_coins: HashMap<u64, usize> = self
+            .state
+            .coins
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.received_height == height && c.membership_proof.is_none())
+            .map(|(i, c)| (c.aocl_index, i))
+            .collect();
+        let mut tracked: Vec<(usize, AuthenticatedItem)> = self
+            .state
+            .coins
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                let proof = c.membership_proof.clone()?;
+                Some((i, AuthenticatedItem { item: Tip5::hash(&c.utxo), ms_membership_proof: proof }))
+            })
+            .collect();
+
+        let mut removals = update.removals.clone();
+        for addition in &update.additions {
+            // A coin of ours being added: its proof is made against the set
+            // before the addition and is already current after it.
+            let index = msa.aocl.num_leafs();
+            let fresh = new_coins.get(&index).map(|&i| {
+                let coin = &self.state.coins[i];
+                let item = Tip5::hash(&coin.utxo);
+                (i, AuthenticatedItem { item, ms_membership_proof: msa.prove(item, coin.sender_randomness, coin.receiver_preimage) })
+            });
+            {
+                let mut records: Vec<&mut RemovalRecord> = removals.iter_mut().collect();
+                RemovalRecord::batch_update_from_addition(&mut records, msa);
+            }
+            {
+                let mut items: Vec<&mut AuthenticatedItem> = tracked.iter_mut().map(|(_, a)| a).collect();
+                AuthenticatedItem::batch_update_from_addition(&mut items, msa, *addition);
+            }
+            msa.add(addition);
+            tracked.extend(fresh);
+        }
+        {
+            let mut items: Vec<&mut AuthenticatedItem> = tracked.iter_mut().map(|(_, a)| a).collect();
+            neptune_consensus::block::mutator_set_update::MutatorSetUpdate::new(removals, vec![])
+                .apply_to_accumulator_and_records(msa, &mut [], &mut items)?;
+        }
+        let guesser = kernel.guesser_fee_addition_records(hash).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        ensure!(
+            *msa == kernel.body.mutator_set_accumulator_after(guesser),
+            "the kept mutator set differs from block {height}'s"
+        );
+        for (i, item) in tracked {
+            let coin = &mut self.state.coins[i];
+            coin.membership_proof = if coin.spent_height.is_none() && msa.verify(item.item, &item.ms_membership_proof) {
+                Some(item.ms_membership_proof)
+            } else {
+                None
+            };
         }
         Ok(())
     }

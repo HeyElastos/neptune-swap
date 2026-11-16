@@ -158,7 +158,8 @@ impl LightWallet {
         };
         // No on-chain notification: the note goes to the counterparty directly.
         let output = TxOutput::no_notification_as_change(utxo, sender_randomness, receiver_preimage.hash());
-        let (details, _) = self.build_spend(plan, snapshot, output, now_ms)?;
+        let basis = self.node_basis(plan, snapshot)?;
+        let (details, _) = self.build_spend(plan, basis, output, now_ms)?;
         Ok((details, note))
     }
 

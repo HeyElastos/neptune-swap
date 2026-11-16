@@ -291,3 +291,84 @@ fn work_compares_as_big_decimals() {
     assert_eq!(work_cmp("123", "124"), Less);
     assert_eq!(work_cmp("7", "7"), Equal);
 }
+
+/// Every unspent coin's own membership proof verifies against `block`'s
+/// mutator set after it; returns how many coins have one.
+fn proofs_hold(w: &LightWallet, block: &Block) -> usize {
+    let msa = block.mutator_set_accumulator_after().unwrap();
+    assert_eq!(w.state().mutator_set.as_ref(), Some(&msa), "kept set = block {}'s", block.header().height);
+    let mut n = 0;
+    for c in w.state().coins.iter().filter(|c| c.spent_height.is_none()) {
+        if let Some(p) = &c.membership_proof {
+            assert!(msa.verify(Tip5::hash(&c.utxo), p), "proof of coin {} holds", c.aocl_index);
+            n += 1;
+        }
+    }
+    n
+}
+
+#[test]
+fn keeps_its_own_membership_proofs_through_blocks() {
+    let genesis = Block::genesis(NETWORK);
+    let mut w = LightWallet::from_phrase(PHRASE, NETWORK).unwrap();
+    w.start_at(&rpc(&genesis)).unwrap();
+    let entropy = WalletEntropy::from_phrase(PHRASE.split_whitespace()).unwrap();
+    let gen0: SpendingKey = entropy.nth_generation_spending_key(0).into();
+    let change0: SpendingKey = entropy.nth_symmetric_key(0).into();
+    let stranger: SpendingKey = GenerationSpendingKey::derive_from_seed(rand::rng().random()).into();
+
+    // Block 1: two coins of ours between strangers' outputs.
+    let (t1, tn1) = payment(&stranger, 3);
+    let (m1, n1) = payment(&gen0, 7);
+    let (t2, tn2) = payment(&stranger, 1);
+    let (m2, n2) = payment(&gen0, 2);
+    let b1 = block_after(&genesis, vec![t1, m1, t2, m2], vec![], vec![tn1, n1, tn2, n2]);
+    let r = w.apply_blocks(vec![rpc(&b1)]).unwrap();
+    assert_eq!(r.received, 2);
+    assert!(r.proofs_dropped.is_none());
+    assert_eq!(proofs_hold(&w, &b1), 2);
+
+    // Block 2: only strangers; the proofs move with the set.
+    let (t3, tn3) = payment(&stranger, 4);
+    let b2 = block_after(&b1, vec![t3], vec![], vec![tn3]);
+    w.apply_blocks(vec![rpc(&b2)]).unwrap();
+    assert_eq!(proofs_hold(&w, &b2), 2);
+
+    // Block 3: spend the 7 with a real removal record made from our own
+    // proof; 4 back as change. The 2 and the change keep proofs.
+    let coin = w.state().coins.iter().find(|c| c.utxo.get_native_currency_amount() == NativeCurrencyAmount::coins(7)).unwrap().clone();
+    let msa2 = b2.mutator_set_accumulator_after().unwrap();
+    let spend = msa2.drop(Tip5::hash(&coin.utxo), coin.membership_proof.as_ref().unwrap());
+    let (change, change_note) = payment(&change0, 4);
+    let b3 = block_after(&b2, vec![change], vec![spend], vec![change_note]);
+    let r = w.apply_blocks(vec![rpc(&b3)]).unwrap();
+    assert_eq!((r.received, r.spent), (1, 1));
+    assert!(r.proofs_dropped.is_none(), "{:?}", r.proofs_dropped);
+    assert_eq!(proofs_hold(&w, &b3), 2);
+    assert!(w.state().coins.iter().find(|c| c.aocl_index == coin.aocl_index).unwrap().membership_proof.is_none());
+
+    // Through JSON and back, still current.
+    let json = serde_json::to_string(w.state()).unwrap();
+    let state: WalletState = serde_json::from_str(&json).unwrap();
+    let w = LightWallet::resume(PHRASE, state).unwrap();
+    assert_eq!(proofs_hold(&w, &b3), 2);
+}
+
+#[test]
+fn a_wallet_without_the_set_takes_it_from_the_next_block() {
+    let genesis = Block::genesis(NETWORK);
+    let mut w = wallet_at(&genesis); // sync point only: set unknown
+    assert!(w.state().mutator_set.is_none());
+    let entropy = WalletEntropy::from_phrase(PHRASE.split_whitespace()).unwrap();
+    let gen0: SpendingKey = entropy.nth_generation_spending_key(0).into();
+    let (m1, n1) = payment(&gen0, 7);
+    let b1 = block_after(&genesis, vec![m1], vec![], vec![n1]);
+    w.apply_blocks(vec![rpc(&b1)]).unwrap();
+    // That coin has no proof of its own (the node is asked for it) ...
+    assert_eq!(proofs_hold(&w, &b1), 0);
+    // ... but the next one does.
+    let (m2, n2) = payment(&gen0, 2);
+    let b2 = block_after(&b1, vec![m2], vec![], vec![n2]);
+    w.apply_blocks(vec![rpc(&b2)]).unwrap();
+    assert_eq!(proofs_hold(&w, &b2), 1);
+}
