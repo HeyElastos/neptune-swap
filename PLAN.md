@@ -169,7 +169,7 @@ capsule" is the wallet's UI. Everything is developed against a local **regtest**
 | M6 | Wallet screens in the capsule (Slint): address + QR, balance, history, send | **built**: create/back up/import, sync, balance, send (form → review → confirm), receive with Private (Generation) or Short (EC Hybrid, QR) addresses and New address, activity (received/sent/pending, block and time). Seen in the dev Home: balance 14.95 NPT after sync (2026-11-16); addresses, QR and activity verified on regtest through the provider (an EC Hybrid payment shows as such), not yet clicked through in Home |
 | M7 | Neptune HTLC lock/claim/refund in the provider (`crates/htlc`), swap-guard on the verified tip | **lock → claim and lock → refund done on regtest** (2026-11-16, release provider, two wallets): see "HTLC on regtest" below. swap-guard on the verified tip not wired yet; the capsule does not call the htlc ops yet (gateway list unchanged) |
 | M8 | Other leg through elastOS Wallet: the fork lets the capsule request `wallet`/`chain` approvals; EVM HTLC contract and Bitcoin HTLC script on their testnets | **EVM contract done** (`contracts/htlc-evm`, 9 forge tests; `crates/evm-htlc`, 5 tests, builds for wasm32; `scripts/evm-htlc-local.sh` lock→claim and lock→refund on local anvil, chain id 8453). **Route done**: the fork lets `neptune-intents` use the Browser app's Wallet bridge (request-accounts → request-transaction → Wallet passkey approval → broadcast-transaction, reads), bound to the calling app; the dev Home's Base is the local anvil chain (`BASE_RPC_URL`). Call sequence for the capsule: `docs/wallet-bridge.md`. Not yet: the capsule's calls (UI session), the NPT↔ETH flow through it. Bitcoin: Wallet has BTC accounts and node reads but cannot send BTC, even on develop 2026-11-16 (`wallet-send-flow.js`: EVM only) |
-| M9 | Solver + transport over the carrier; end-to-end swap on regtest/testnets | **NPT → ETH swap done on local chains** (`crates/solver`, `scripts/swap-e2e.sh`, 19 s: user −2.05 NPT +1 ETH less gas, solver +1.95 NPT): signed intent/quote/accept, NPT lock checked on the solver's own node, ETH lock checked on chain, claim publishes the secret, solver claims NPT. Not yet: carrier transport (see "M9 transport" below), signed message kinds for the NPT note and the ETH lock's location, the reverse direction (ETH → NPT, the solver holds the secret), the capsule as the user side (Wallet approvals instead of a test key) |
+| M9 | Solver + transport over the carrier; end-to-end swap on regtest/testnets | **Swap done on local chains, signed and sealed** (`crates/solver`, `scripts/swap-e2e.sh`): every step checked, lock messages signed, every message sealed to its recipient's DID. Carrier hop: blocked on the user's decision to grant the solver `elastos://peer/*` (see "M9 transport"). Not yet: the reverse direction, the capsule as the user side |
 
 ## Order of work
 
@@ -252,23 +252,31 @@ tests on a local chain; (2) ABI encoding for lock/claim/refund in Rust; (3) the 
 the capsule asks Wallet for those transactions; (4) the swap flow ETH ↔ NPT on the local chain,
 then USDC (ERC-20 approve + lock). Tooling needed: Foundry (anvil, forge, solc), not installed.
 
-## M9 transport (design, not built)
+## M9 transport (2026-11-16)
 
-Carrier (runtime `carrier.rs`, `docs/CARRIER.md`): iroh gossip with `gossip_join {topic}`,
-`gossip_send`, `gossip_recv` (a poll), `get_ticket`; peers join through explicit tickets or
-bootstrap peers. What it takes:
-- **Capsule side:** the fork lets `neptune-intents` use `elastos://peer` gossip ops (today the
-  gateway serves six schemes only), for one intents topic.
-- **Solver side:** the solver runs on its own elastOS node (a solver Home) so it has a carrier
-  node; the native solver daemon reaches `elastos://peer` through that runtime (Runtime API with
-  its attach secret and a capability token). Alternative: embed iroh 1.0.2 + iroh-gossip 0.101
-  and speak the carrier's framing directly (no runtime, but tied to its wire format).
-- **Discovery:** the solver publishes its DID and carrier ticket; the capsule joins the topic
-  with that ticket. A registry or signed list later (open question).
-- **Sealing (rule 5):** messages are sealed to the recipient's DID before gossip (the protocol
-  leaves this to transport). Not built: X25519 from the Ed25519 did:key, or Hey's hybrid PQ.
-- **Message kinds still missing:** `npt_locked {accept digest, note}` and
-  `evm_locked {quote digest, contract, id}`, signed like the others (today plain JSON).
+**Done:** the lock announcements are signed protocol messages (`npt_locked`, `evm_locked`,
+bound to the Accept's digest and the right signer), and every message is sealed to its
+recipient's `did:key` (`intents_protocol::seal`/`open`: X25519 from Ed25519, HKDF-SHA256,
+ChaCha20-Poly1305 with the DID as associated data; not post-quantum yet). `scripts/swap-e2e.sh`
+runs the swap with both: user −2.05 NPT +1 ETH, solver +1.95 NPT. The harness hands the sealed
+bytes over; the carrier hop is what is left.
+
+**What the carrier hop needs (found by probing the dev Home):**
+- The gateway's local API only has `auth/attach`, `peer/get_ticket` and `health`. The full
+  Runtime API (capabilities, `POST /api/provider/peer/<op>`) is the managed runtime's
+  (`home-runtime-coords.json`): attach (`client` or `shell`), `POST /api/capability/request
+  {resource: "elastos://peer/*", action}` → pending → `POST /api/capability/grant` (shell only)
+  → token → provider calls with `Authorization`, `X-Capability-Token`, `X-Elastos-Capsule-Id`.
+- **Decision for the user:** granting the solver `elastos://peer/*` on its node is an access
+  decision. The agent did not approve its own request (a pending request from the probe in the
+  dev Home grants nothing and expires). Options: the user approves it in Home/System, or the
+  solver node's shell policy (`policy/home-auto.json`) gets an explicit rule for the solver.
+- Then: the solver joins one intents topic (`gossip_join`, or `gossip_join_exact` with tickets
+  between isolated nodes), and the capsule gets the same ops through the fork's gateway (today
+  the gateway serves six schemes; `peer` would be added for `neptune-intents`). Gossip receive
+  is a poll (`gossip_recv`). Messages go as `content` (text): the sealed bytes, base64.
+- Embedding iroh in the solver instead would tie it to the carrier's wire format
+  (`GossipMessage`, topic derivation); not chosen.
 
 ## HTLC on regtest (2026-11-16)
 
