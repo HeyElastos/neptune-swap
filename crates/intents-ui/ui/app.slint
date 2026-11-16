@@ -113,6 +113,8 @@ component Leg inherits Rectangle {
     in property <string> label;
     in property <AssetView> asset;
     in-out property <string> amount;
+    // What the amount is worth ("≈ $250.00"), when prices are shown.
+    in property <string> usd;
     // The chip's bottom right corner, for its popover.
     callback pick-asset(length, length);
     border-radius: Rad.ctrl;
@@ -178,6 +180,7 @@ component Leg inherits Rectangle {
                 }
             }
         }
+        if root.usd != "": Text { text: root.usd; color: Skin.muted; font-size: Ty.caption; }
     }
 }
 
@@ -696,6 +699,19 @@ export component AppWindow inherits Window {
     in-out property <string> want-amount;
     in-out property <int> ttl-index: 1;
     in property <string> form-error;
+    // USD reference prices: "off" (not asked), "asking" (waiting for Home's
+    // approval or the sources), "on", "denied".
+    in property <string> prices-state: "off";
+    in property <string> give-usd;
+    in property <string> want-usd;
+    // The unit prices and how the asked amount compares with the market.
+    in property <string> price-note;
+    callback show-prices();
+    callback amounts-changed();
+    changed give-amount => { root.amounts-changed(); }
+    changed want-amount => { root.amounts-changed(); }
+    changed give-index => { root.amounts-changed(); }
+    changed want-index => { root.amounts-changed(); }
 
     // The node: "idle", "ok", "warn" or "error".
     in property <string> node-state: "idle";
@@ -1016,6 +1032,7 @@ export component AppWindow inherits Window {
                                 label: "You give";
                                 asset: root.assets[root.give-index];
                                 amount <=> root.give-amount;
+                                usd: root.give-usd;
                                 pick-asset(right, bottom) => { root.open-popover("give", right, bottom); }
                             }
                             HorizontalLayout {
@@ -1047,6 +1064,7 @@ export component AppWindow inherits Window {
                                 label: "You want at least";
                                 asset: root.assets[root.want-index];
                                 amount <=> root.want-amount;
+                                usd: root.want-usd;
                                 pick-asset(right, bottom) => { root.open-popover("want", right, bottom); }
                             }
                             HorizontalLayout {
@@ -1064,6 +1082,24 @@ export component AppWindow inherits Window {
                                     options: ["5 min", "10 min", "30 min"];
                                     selected <=> root.ttl-index;
                                 }
+                            }
+                            if root.prices-state == "on" && root.price-note != "": Text {
+                                text: root.price-note;
+                                color: Skin.muted;
+                                font-size: Ty.small;
+                                wrap: word-wrap;
+                            }
+                            if root.prices-state == "asking": Text {
+                                text: "Approve showing USD prices in Home…";
+                                color: Skin.muted;
+                                font-size: Ty.small;
+                                wrap: word-wrap;
+                            }
+                            if root.prices-state == "off" || root.prices-state == "denied": Text {
+                                text: root.prices-state == "denied" ? "USD prices were not approved. Ask again" : "Show USD prices";
+                                color: Skin.accent-text;
+                                font-size: Ty.small;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.show-prices(); } }
                             }
                             if root.form-error != "": Text {
                                 text: root.form-error;

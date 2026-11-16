@@ -6,11 +6,13 @@ mod backdrop;
 mod intent;
 mod qr;
 mod runtime;
+mod usd;
 mod wallet_ui;
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
-use serde_json::json;
+use serde_json::{json, Value};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 
 slint::include_modules!();
@@ -46,10 +48,23 @@ pub fn run() -> Result<(), slint::PlatformError> {
     app.set_give_index(intent::DEFAULT_GIVE as i32);
     app.set_want_index(intent::DEFAULT_WANT as i32);
 
-    let weak = app.as_weak();
-    app.on_review(move || review(&weak.unwrap()));
-
     let token = runtime::home_token();
+    let prices: Rc<RefCell<Option<Value>>> = Rc::new(RefCell::new(None));
+    {
+        let (weak, prices) = (app.as_weak(), prices.clone());
+        app.on_review(move || review(&weak.unwrap(), prices.borrow().as_ref()));
+    }
+    {
+        let (weak, prices) = (app.as_weak(), prices.clone());
+        app.on_amounts_changed(move || show_usd(&weak.unwrap(), prices.borrow().as_ref()));
+    }
+    {
+        let (weak, prices, token) = (app.as_weak(), prices.clone(), token.clone());
+        app.on_show_prices(move || {
+            weak.unwrap().set_prices_state("asking".into());
+            spawn(follow_prices(weak.clone(), prices.clone(), token.clone().unwrap_or_default()));
+        });
+    }
     let networks: Rc<VecModel<SharedString>> = Rc::new(VecModel::default());
     app.set_networks(ModelRc::from(networks.clone()));
     {
@@ -108,7 +123,57 @@ fn shot_and_quit(app: &AppWindow, path: String) {
     });
 }
 
-fn review(app: &AppWindow) {
+/// The USD lines for the form as it stands.
+fn show_usd(app: &AppWindow, prices: Option<&Value>) {
+    let Some(prices) = prices else { return };
+    let symbol = |i: i32| intent::ASSETS.get(i as usize).map_or("", |a| a.symbol);
+    let lines = usd::lines(
+        prices,
+        (symbol(app.get_give_index()), &app.get_give_amount()),
+        (symbol(app.get_want_index()), &app.get_want_amount()),
+    );
+    app.set_give_usd(lines.give.into());
+    app.set_want_usd(lines.want.into());
+    app.set_price_note(lines.note.into());
+}
+
+/// Asks the provider for prices (Home asks the user the first time), then
+/// keeps them a minute fresh while the page is open.
+async fn follow_prices(weak: Weak<AppWindow>, prices: Rc<RefCell<Option<Value>>>, token: String) {
+    let mut waited = 0;
+    loop {
+        match runtime::provider("prices", &json!({}), &token).await {
+            Ok(data) => {
+                *prices.borrow_mut() = Some(data);
+                let Some(app) = weak.upgrade() else { return };
+                app.set_prices_state("on".into());
+                show_usd(&app, prices.borrow().as_ref());
+                drop(app);
+                runtime::sleep_ms(60_000).await;
+            }
+            Err(e) if e.code == "approval_pending" && waited < 600 => {
+                waited += 1;
+                runtime::sleep_ms(2_000).await;
+            }
+            Err(e) => {
+                let Some(app) = weak.upgrade() else { return };
+                if prices.borrow().is_some() {
+                    // Keep the last prices; try again in a minute.
+                    drop(app);
+                    runtime::sleep_ms(60_000).await;
+                    continue;
+                }
+                app.set_prices_state(if e.code == "approval_denied" || e.code == "approval_pending" { "denied" } else { "off" }.into());
+                if e.code != "approval_denied" && e.code != "approval_pending" {
+                    app.set_form_error(e.message.into());
+                }
+                return;
+            }
+        }
+    }
+}
+
+fn review(app: &AppWindow, prices: Option<&Value>) {
     let form = intent::Form {
         give: app.get_give_index() as usize,
         give_amount: &app.get_give_amount(),
@@ -120,7 +185,12 @@ fn review(app: &AppWindow) {
         Ok(built) => {
             let side = |index: usize, amount: &str| {
                 let asset = &intent::ASSETS[index];
-                format!("{} {} · {}", amount.trim(), asset.symbol, asset.network)
+                let worth = prices
+                    .and_then(|p| usd::price(p, asset.symbol))
+                    .and_then(|p| usd::value(amount, p))
+                    .map(|v| format!(" ({})", usd::format(v)))
+                    .unwrap_or_default();
+                format!("{} {}{worth} · {}", amount.trim(), asset.symbol, asset.network)
             };
             app.set_sum_give(side(form.give, form.give_amount).into());
             app.set_sum_want(side(form.want, form.want_amount).into());
@@ -214,8 +284,19 @@ fn demo(app: &AppWindow) {
     }
     app.set_give_amount("250".into());
     app.set_want_amount("1.5".into());
+    if state == "prices" || state == "review-prices" {
+        // Reference prices as the provider gives them (no network here).
+        let prices = json!({"prices": {"NPT": {"usd": "0.1499"}, "USDC": {"usd": "0.9997"}, "BTC": {"usd": "64505.9"}, "ETH": {"usd": "1819.88"}}});
+        app.set_want_amount("1600".into());
+        app.set_prices_state("on".into());
+        show_usd(app, Some(&prices));
+        if state == "review-prices" {
+            review(app, Some(&prices));
+        }
+        return;
+    }
     if state == "review" {
-        review(app);
+        review(app, None);
         return;
     }
     // A popover anchors to its trigger, so it opens once the window has laid out.

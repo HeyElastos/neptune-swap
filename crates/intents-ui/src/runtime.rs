@@ -62,14 +62,16 @@ mod web {
             .await
             .map_err(|_| failed("The Runtime did not answer."))?
             .unchecked_into();
-        if response.status() == 401 || response.status() == 403 {
-            return Err(failed("This Home has not given the app Neptune access."));
-        }
         let text = JsFuture::from(response.text().map_err(|_| failed("unreadable reply"))?)
             .await
             .ok()
             .and_then(|t| t.as_string())
             .unwrap_or_default();
+        // A typed refusal (an approval still open or turned down) says what it is.
+        let typed = serde_json::from_str::<Value>(&text).ok().filter(|v| v["code"].is_string());
+        if (response.status() == 401 || response.status() == 403) && typed.is_none() {
+            return Err(failed("This Home has not given the app Neptune access."));
+        }
         let reply: Value = serde_json::from_str(&text)
             .map_err(|_| failed(format!("The Runtime answered {}.", response.status())))?;
         if reply["status"] == "ok" {

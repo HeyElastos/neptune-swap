@@ -11,7 +11,9 @@ export ELASTOS_COLLABORATION_STARTUP_MODE=isolated
 # neptune-main reads the public node over https: development only (it breaks
 # the no-domains rule; the node sees this machine's address). Sending on main
 # net needs real proving. neptune-regtest is the local node (scripts/regtest-node.sh).
-export NEPTUNE_PROVIDER_CONFIG='{"allow_remote_nodes":true,"networks":[{"id":"neptune-main","rpc":"https://wallet.neptunefundamentals.org"},{"id":"neptune-regtest","rpc":"http://127.0.0.1:9797"}]}'
+# price_sources: the provider may ask CoinGecko and Kraken for USD reference prices;
+# the gateway still asks the user in Home before the capsule gets any.
+export NEPTUNE_PROVIDER_CONFIG='{"allow_remote_nodes":true,"price_sources":true,"networks":[{"id":"neptune-main","rpc":"https://wallet.neptunefundamentals.org"},{"id":"neptune-regtest","rpc":"http://127.0.0.1:9797"}]}'
 export NEPTUNE_PROVIDER_DATA="$DEV_HOME/neptune-provider-data"
 # chain-provider's "Base" is the local anvil chain (chain id 8453) when one runs
 # on 127.0.0.1:8545: Wallet signs as for Base, with local play money only.
