@@ -73,7 +73,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
         None => set_node(&app, "idle", "Not in Home", "Open Neptune Swap from Home to reach the Neptune node."),
     }
-    // Development: NEPTUNE_INTENTS_SIZE=360x760 lays the window out at that size (a phone).
+    // Development: NEPTUNE_SWAP_SIZE=360x760 lays the window out at that size (a phone).
     #[cfg(not(target_arch = "wasm32"))]
     if let Some((w, h)) = runtime::query("size").and_then(|s| {
         let (w, h) = s.split_once('x')?;
@@ -199,7 +199,7 @@ pub(crate) fn group_thousands(n: u64) -> String {
     out
 }
 
-/// Development only: `?demo=asset|node|review` (or NEPTUNE_INTENTS_DEMO natively) opens that
+/// Development only: `?demo=asset|node|review` (or NEPTUNE_SWAP_DEMO natively) opens that
 /// state with a filled form, and `look=dark|light` pins the look, for screenshots.
 fn demo(app: &AppWindow) {
     match runtime::query("look").as_deref() {

@@ -350,7 +350,7 @@ pub fn home_token() -> Option<String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn query(name: &str) -> Option<String> {
-    std::env::var(format!("NEPTUNE_INTENTS_{}", name.to_uppercase())).ok()
+    std::env::var(format!("NEPTUNE_SWAP_{}", name.to_uppercase())).ok()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

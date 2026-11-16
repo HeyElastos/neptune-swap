@@ -66,12 +66,12 @@ fn main() -> Result<()> {
         Some(coords) => {
             let c = Carrier::connect(
                 coords.as_ref(),
-                "neptune-intents",
+                "neptune-swap",
                 "solver",
                 "Neptune swaps: the solver's intents topic",
                 Duration::from_secs(280),
             )?;
-            let topic = format!("neptune-intents-dev-{:x}", rand::random::<u64>());
+            let topic = format!("neptune-swap-dev-{:x}", rand::random::<u64>());
             c.join(&topic)?;
             let user = c.party("user");
             println!("   carrier: joined {topic}");

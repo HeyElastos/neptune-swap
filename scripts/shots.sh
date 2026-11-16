@@ -13,7 +13,7 @@ for look in dark light; do
     out="screenshots/$look-$state${SIZE:+-$SIZE}.png"
     rm -f "$out"
     demo="$state"; [ "$state" = form ] && demo=""
-    NEPTUNE_INTENTS_LOOK=$look NEPTUNE_INTENTS_DEMO=$demo NEPTUNE_INTENTS_SHOT=$out NEPTUNE_INTENTS_SIZE=${SIZE:-} \
+    NEPTUNE_SWAP_LOOK=$look NEPTUNE_SWAP_DEMO=$demo NEPTUNE_SWAP_SHOT=$out NEPTUNE_SWAP_SIZE=${SIZE:-} \
       target/debug/intents-ui >/dev/null 2>&1 &
     pid=$!
     i=0; while [ ! -f "$out" ] && [ $i -lt 40 ]; do sleep 0.25; i=$((i+1)); done

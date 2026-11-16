@@ -2,7 +2,7 @@
 # Installs the Neptune Swap capsule into the isolated development Home
 # (default ~/elastos-neptune-dev, see PLAN.md). Never touches the real Home:
 # its components.json is pinned by the signed release.
-#   scripts/install-dev-home.sh            copy capsules/neptune-intents and list it
+#   scripts/install-dev-home.sh            copy capsules/neptune-swap and list it
 # Env: DEV_HOME (default $HOME/elastos-neptune-dev).
 set -eu
 cd "$(dirname "$0")/.."
@@ -13,17 +13,19 @@ REAL="$HOME/Library/Application Support/elastos"
 test -f "$DATA/components.json" || { echo "no dev Home at $DATA" >&2; exit 1; }
 # The Runtime refuses a principal root whose data folder others can read.
 chmod 700 "$DATA"
-test -f capsules/neptune-intents/browser/pkg/intents-ui_bg.wasm || { echo "build first: scripts/build-intents-capsule.sh" >&2; exit 1; }
-rm -rf "$DATA/capsules/neptune-intents"
-cp -R capsules/neptune-intents "$DATA/capsules/neptune-intents"
+test -f capsules/neptune-swap/browser/pkg/intents-ui_bg.wasm || { echo "build first: scripts/build-intents-capsule.sh" >&2; exit 1; }
+# The app was called neptune-intents until 2026-11-16: remove that install.
+rm -rf "$DATA/capsules/neptune-intents" "$DATA/capsules/neptune-swap"
+cp -R capsules/neptune-swap "$DATA/capsules/neptune-swap"
 python3 -I - "$DATA/components.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 manifest = json.load(open(path))
-manifest["external"]["neptune-intents"] = {
-    "install_path": "capsules/neptune-intents",
+manifest["external"].pop("neptune-intents", None)
+manifest["external"]["neptune-swap"] = {
+    "install_path": "capsules/neptune-swap",
     "description": "Neptune Swap (development)",
-    "platforms": {"*": {"install_path": "capsules/neptune-intents"}},
+    "platforms": {"*": {"install_path": "capsules/neptune-swap"}},
 }
 json.dump(manifest, open(path, "w"), indent=2)
 PY
@@ -64,14 +66,17 @@ import sys
 path = sys.argv[1]
 source = open(path).read()
 anchor = "const HOME_CLIPBOARD_TARGET_PURPOSE_POLICY = Object.freeze({\n"
-entry = ('  "neptune-intents": Object.freeze({\n'
-         '    "neptune.address": Object.freeze({\n'
-         '      operations: Object.freeze(["write"]),\n'
-         '      maxUtf8Bytes: MAX_HOME_CLIPBOARD_TEXT_UTF8_BYTES,\n'
-         '    }),\n'
-         '  }),\n')
-if '"neptune-intents"' not in source:
+def entry_for(app):
+    return (f'  "{app}": Object.freeze({{\n'
+            '    "neptune.address": Object.freeze({\n'
+            '      operations: Object.freeze(["write"]),\n'
+            '      maxUtf8Bytes: MAX_HOME_CLIPBOARD_TEXT_UTF8_BYTES,\n'
+            '    }),\n'
+            '  }),\n')
+source = source.replace(entry_for("neptune-intents"), "")
+if '"neptune-swap"' not in source:
     assert anchor in source, "Home's clipboard policy moved"
-    open(path, "w").write(source.replace(anchor, anchor + entry, 1))
+    source = source.replace(anchor, anchor + entry_for("neptune-swap"), 1)
+open(path, "w").write(source)
 PY
-echo "installed neptune-intents and neptune-provider into $DATA"
+echo "installed neptune-swap and neptune-provider into $DATA"

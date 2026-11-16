@@ -12,7 +12,7 @@ index f96bcf74..3b71342f 100755
  
  /// Reserved names for provider targets that only Runtime invocation can reach.
 diff --git a/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs b/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs
-index 471b56d0..ea4591a2 100644
+index 471b56d0..b5fc204f 100644
 --- a/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs
 +++ b/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs
 @@ -59,7 +59,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_bridge(
@@ -31,7 +31,7 @@ index 471b56d0..ea4591a2 100644
 +/// Local Neptune development fork: the apps that may use this EIP-1193 wallet
 +/// bridge. Requests are bound to the app that made them (`requested_by_actor`
 +/// is the launch token's actor), so one app cannot read or finish another's.
-+const WALLET_BRIDGE_APPS: &[&str] = &[BROWSER_CAPSULE_ID, "neptune-intents"];
++const WALLET_BRIDGE_APPS: &[&str] = &[BROWSER_CAPSULE_ID, "neptune-swap"];
 +
  fn validate_browser_wallet_page_origin(
      page_url: &str,
@@ -118,7 +118,7 @@ index 471b56d0..ea4591a2 100644
          .ok_or_else(|| {
              (
 diff --git a/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs b/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
-index c6742ea3..225e1f12 100644
+index c6742ea3..d17795ff 100644
 --- a/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
 +++ b/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
 @@ -1602,6 +1602,67 @@ pub(super) async fn gateway_library_events_stream(
@@ -126,33 +126,33 @@ index c6742ea3..225e1f12 100644
  }
  
 +/// Local Neptune development fork: the only app the `neptune` scheme serves.
-+const NEPTUNE_INTENTS_CAPSULE_ID: &str = "neptune-intents";
-+/// Local Neptune development fork: the carrier topics neptune-intents may use.
-+const NEPTUNE_INTENTS_TOPIC_PREFIX: &str = "neptune-intents";
-+const NEPTUNE_INTENTS_MESSAGE_MAX_BYTES: usize = 64 * 1024;
++const NEPTUNE_SWAP_CAPSULE_ID: &str = "neptune-swap";
++/// Local Neptune development fork: the carrier topics neptune-swap may use.
++const NEPTUNE_SWAP_TOPIC_PREFIX: &str = "neptune-swap";
++const NEPTUNE_SWAP_MESSAGE_MAX_BYTES: usize = 64 * 1024;
 +
-+/// Local Neptune development fork: the `peer` request neptune-intents may make,
++/// Local Neptune development fork: the `peer` request neptune-swap may make,
 +/// rebuilt from its body. Only its own topics; the sender and receive cursor
 +/// are the gateway's, derived from the launch session (never the session id
 +/// itself, which stays off the network), so the capsule cannot speak or read
 +/// as anyone else. Gossip timestamps, nonces and signatures are the
 +/// provider's; the swap messages carry their own signatures.
-+fn neptune_intents_peer_request(
++fn neptune_swap_peer_request(
 +    op: &str,
 +    body: &serde_json::Value,
 +    session_id: &str,
 +) -> Result<serde_json::Value, String> {
 +    let topic = || -> Result<String, String> {
 +        let topic = body.get("topic").and_then(serde_json::Value::as_str).unwrap_or_default();
-+        let ok = topic.starts_with(NEPTUNE_INTENTS_TOPIC_PREFIX)
++        let ok = topic.starts_with(NEPTUNE_SWAP_TOPIC_PREFIX)
 +            && topic.len() <= 128
 +            && topic.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_./".contains(&b));
 +        ok.then(|| topic.to_string())
-+            .ok_or_else(|| format!("topic must start with {NEPTUNE_INTENTS_TOPIC_PREFIX} (a-z, 0-9, -_./, at most 128)"))
++            .ok_or_else(|| format!("topic must start with {NEPTUNE_SWAP_TOPIC_PREFIX} (a-z, 0-9, -_./, at most 128)"))
 +    };
 +    let party = format!(
-+        "neptune-intents:{}",
-+        &hex::encode(sha2::Sha256::digest(format!("neptune-intents/peer/{session_id}")))[..16]
++        "neptune-swap:{}",
++        &hex::encode(sha2::Sha256::digest(format!("neptune-swap/peer/{session_id}")))[..16]
 +    );
 +    Ok(match op {
 +        "get_ticket" => serde_json::json!({ "op": op }),
@@ -167,12 +167,12 @@ index c6742ea3..225e1f12 100644
 +        }
 +        "gossip_send" => {
 +            let message = body.get("message").and_then(serde_json::Value::as_str).unwrap_or_default();
-+            if message.is_empty() || message.len() > NEPTUNE_INTENTS_MESSAGE_MAX_BYTES {
-+                return Err(format!("message must be 1 to {NEPTUNE_INTENTS_MESSAGE_MAX_BYTES} bytes"));
++            if message.is_empty() || message.len() > NEPTUNE_SWAP_MESSAGE_MAX_BYTES {
++                return Err(format!("message must be 1 to {NEPTUNE_SWAP_MESSAGE_MAX_BYTES} bytes"));
 +            }
 +            serde_json::json!({
 +                "op": op, "topic": topic()?, "message": message,
-+                "sender": NEPTUNE_INTENTS_CAPSULE_ID, "sender_id": party,
++                "sender": NEPTUNE_SWAP_CAPSULE_ID, "sender_id": party,
 +            })
 +        }
 +        "gossip_recv" => {
@@ -193,13 +193,13 @@ index c6742ea3..225e1f12 100644
                      .into_response()
              }
          },
-+        // Local Neptune development fork: the neptune-intents capsule reaches
++        // Local Neptune development fork: the neptune-swap capsule reaches
 +        // the neptune provider's typed operations, nothing else does.
 +        "neptune" => match op.as_str() {
 +            "networks" | "status" | "wallet_status" | "wallet_create" | "wallet_import"
 +            | "wallet_receive" | "wallet_sync" | "wallet_balance" | "wallet_send"
 +            | "wallet_addresses" | "wallet_new_address" | "wallet_history" | "wallet_send_status" => {
-+                &[NEPTUNE_INTENTS_CAPSULE_ID]
++                &[NEPTUNE_SWAP_CAPSULE_ID]
 +            }
 +            _ => {
 +                return (
@@ -209,11 +209,11 @@ index c6742ea3..225e1f12 100644
 +                    .into_response()
 +            }
 +        },
-+        // Local Neptune development fork: neptune-intents speaks on its own
-+        // carrier topics (requests rebuilt by neptune_intents_peer_request).
++        // Local Neptune development fork: neptune-swap speaks on its own
++        // carrier topics (requests rebuilt by neptune_swap_peer_request).
 +        "peer" => match op.as_str() {
 +            "get_ticket" | "gossip_join" | "gossip_join_exact" | "gossip_leave" | "gossip_send"
-+            | "gossip_recv" => &[NEPTUNE_INTENTS_CAPSULE_ID],
++            | "gossip_recv" => &[NEPTUNE_SWAP_CAPSULE_ID],
 +            _ => {
 +                return (
 +                    StatusCode::NOT_FOUND,
@@ -230,7 +230,7 @@ index c6742ea3..225e1f12 100644
              }
          }
 +    } else if scheme == "peer" {
-+        request = match neptune_intents_peer_request(&op, &request, &session_id) {
++        request = match neptune_swap_peer_request(&op, &request, &session_id) {
 +            Ok(value) => value,
 +            Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
 +        };
@@ -243,44 +243,44 @@ index c6742ea3..225e1f12 100644
  }
 +
 +#[cfg(test)]
-+mod neptune_intents_peer_tests {
-+    use super::neptune_intents_peer_request as req;
++mod neptune_swap_peer_tests {
++    use super::neptune_swap_peer_request as req;
 +    use serde_json::json;
 +
 +    #[test]
 +    fn only_its_own_topics() {
-+        assert!(req("gossip_join", &json!({"topic": "neptune-intents/test"}), "s").is_ok());
-+        for topic in ["chat", "home-services-requests", "neptune-intentsX", "neptune-intents/A", ""] {
++        assert!(req("gossip_join", &json!({"topic": "neptune-swap/test"}), "s").is_ok());
++        for topic in ["chat", "home-services-requests", "neptune-swapX", "neptune-swap/A", ""] {
 +            assert!(req("gossip_join", &json!({ "topic": topic }), "s").is_err(), "{topic}");
 +        }
-+        assert!(req("connect", &json!({"topic": "neptune-intents"}), "s").is_err());
++        assert!(req("connect", &json!({"topic": "neptune-swap"}), "s").is_err());
 +    }
 +
 +    #[test]
 +    fn the_gateway_picks_sender_and_cursor_from_the_session() {
 +        let sent = req(
 +            "gossip_send",
-+            &json!({"topic": "neptune-intents", "message": "x", "sender_id": "solver", "signature": "s", "ts": 1}),
++            &json!({"topic": "neptune-swap", "message": "x", "sender_id": "solver", "signature": "s", "ts": 1}),
 +            "session-a",
 +        )
 +        .unwrap();
 +        let party = sent["sender_id"].as_str().unwrap();
-+        assert!(party.starts_with("neptune-intents:") && !party.contains("session-a"));
++        assert!(party.starts_with("neptune-swap:") && !party.contains("session-a"));
 +        assert!(sent.get("signature").is_none() && sent.get("ts").is_none());
-+        let recv = req("gossip_recv", &json!({"topic": "neptune-intents", "consumer_id": "solver", "limit": 999}), "session-a").unwrap();
++        let recv = req("gossip_recv", &json!({"topic": "neptune-swap", "consumer_id": "solver", "limit": 999}), "session-a").unwrap();
 +        assert_eq!((recv["consumer_id"].as_str(), recv["skip_sender_id"].as_str()), (Some(party), Some(party)));
 +        assert_eq!(recv["limit"], 50);
-+        let other = req("gossip_recv", &json!({"topic": "neptune-intents"}), "session-b").unwrap();
++        let other = req("gossip_recv", &json!({"topic": "neptune-swap"}), "session-b").unwrap();
 +        assert_ne!(other["consumer_id"].as_str(), Some(party));
 +    }
 +
 +    #[test]
 +    fn messages_are_bounded() {
 +        let big = "a".repeat(64 * 1024 + 1);
-+        assert!(req("gossip_send", &json!({"topic": "neptune-intents", "message": big}), "s").is_err());
-+        assert!(req("gossip_send", &json!({"topic": "neptune-intents", "message": ""}), "s").is_err());
++        assert!(req("gossip_send", &json!({"topic": "neptune-swap", "message": big}), "s").is_err());
++        assert!(req("gossip_send", &json!({"topic": "neptune-swap", "message": ""}), "s").is_err());
 +        let peers: Vec<String> = (0..17).map(|i| i.to_string()).collect();
-+        assert!(req("gossip_join_exact", &json!({"topic": "neptune-intents", "peers": peers}), "s").is_err());
++        assert!(req("gossip_join_exact", &json!({"topic": "neptune-swap", "peers": peers}), "s").is_err());
 +    }
 +}
 diff --git a/elastos/crates/elastos-server/src/server_infra.rs b/elastos/crates/elastos-server/src/server_infra.rs

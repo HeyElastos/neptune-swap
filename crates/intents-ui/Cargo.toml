@@ -19,7 +19,7 @@ slint = { version = "=1.18.1", default-features = false, features = ["std", "com
 tiny-skia = { version = "0.11", default-features = false, features = ["std"] }
 getrandom = { version = "0.2", features = ["js"] }
 
-# Natively, NEPTUNE_INTENTS_SHOT=<file.png> saves the window as a PNG (development screenshots).
+# Natively, NEPTUNE_SWAP_SHOT=<file.png> saves the window as a PNG (development screenshots).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "png-format"] }
 

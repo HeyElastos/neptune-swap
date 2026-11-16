@@ -120,7 +120,7 @@ impl Carrier {
     pub fn send(&self, topic: &str, bytes: &[u8]) -> Result<()> {
         self.op(
             "gossip_send",
-            json!({"topic": topic, "message": URL_SAFE_NO_PAD.encode(bytes), "sender": "neptune-intents", "sender_id": self.sender_id}),
+            json!({"topic": topic, "message": URL_SAFE_NO_PAD.encode(bytes), "sender": "neptune-swap", "sender_id": self.sender_id}),
         )?;
         Ok(())
     }

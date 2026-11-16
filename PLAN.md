@@ -1,7 +1,8 @@
 # Neptune Swap: private swaps on elastOS
 
-**Neptune Swap** (renamed from Neptune Intents, user 2026-11-16; the app id is still
-`neptune-intents`, see Known limits). A private RFQ/swap app in the spirit of NEAR Intents, built as an elastOS capsule, with
+**Neptune Swap** (renamed from Neptune Intents, user 2026-11-16; app id `neptune-swap`, was
+`neptune-intents`; the crypto domain tags keep `neptune-intents/…`, since swap secrets and
+signed/sealed messages depend on them). A private RFQ/swap app in the spirit of NEAR Intents, built as an elastOS capsule, with
 Neptune Cash as the settlement layer. This repo is its own project, separate from
 Hyper and hey-engine (decided 2026-10-29).
 
@@ -93,7 +94,7 @@ First slice, built and tested:
   Ops `init`, `networks`, `status` (node height via `chain_height`), `shutdown`.
   Node address must be a loopback IP literal (no DNS); replies never contain it.
   6 tests with a fake loopback node.
-- `capsules/neptune-provider/capsule.json`, `capsules/neptune-intents/capsule.json`:
+- `capsules/neptune-provider/capsule.json`, `capsules/neptune-swap/capsule.json`:
   both pass the Runtime's own `CapsuleManifest::validate` (elastos-common).
 - `crates/intents-ui`: the capsule's UI in **Slint and Rust** (user 2026-10-30: write in Slint
   and Rust as much as we can). Hyper's Modern design tokens (graphite/white, gold the only
@@ -103,11 +104,11 @@ First slice, built and tested:
   (exact `Amount::parse_decimal`), so page and solvers share one rule set. Runtime calls, the
   Home launch token and the `home:app-ready` handshake are Rust (web-sys). 7 tests.
   - Capsule page: `scripts/build-intents-capsule.sh` builds wasm32 (Slint 1.18.1, winit +
-    femtovg on WebGL2, as Hyper's web build) into `capsules/neptune-intents/browser/pkg/`;
+    femtovg on WebGL2, as Hyper's web build) into `capsules/neptune-swap/browser/pkg/`;
     `index.html` only starts the wasm. ~1.5 MB gzipped.
   - Screenshots: WebKit snapshots do not capture WebGL, so the native build saves the window
-    with Slint's `take_snapshot`: `NEPTUNE_INTENTS_LOOK=dark|light NEPTUNE_INTENTS_DEMO=asset|node|review
-    NEPTUNE_INTENTS_SHOT=out.png target/debug/intents-ui`. On the web: `?look=…&demo=…`.
+    with Slint's `take_snapshot`: `NEPTUNE_SWAP_LOOK=dark|light NEPTUNE_SWAP_DEMO=asset|node|review
+    NEPTUNE_SWAP_SHOT=out.png target/debug/intents-ui`. On the web: `?look=…&demo=…`.
 - Assets: NPT (Neptune), **ELA on the Elastos main chain** (`Chain::Elastos`, 8 decimals,
   1 ELA = 10^8 sela; not ESC), USDC and ETH (Ethereum), BTC. NPT, ELA and BTC are all UTXO
   chains. Whether the ELA main chain's script supports a SHA-256 hashlock with a timelock
@@ -169,7 +170,7 @@ capsule" is the wallet's UI. Everything is developed against a local **regtest**
 | M5 | Send: membership proofs from the node (`wallet_restoreMembershipProof`), `TransactionDetails` → `ProofCollection` → `wallet_submitTransaction` | **done on regtest**; **real proving built** (2026-11-16): `light_core::send::prove_collection` makes a real ProofCollection for the tip's rule set and verifies every proof before submitting; `neptune-prover` runs out of process beside the provider. One-input payment: 6 proofs in 27.8 s, prover peak ~2.6 GB (`light-cli prove-dry-run`, proven as testnet over regtest). The Runtime waits 30 s per provider reply, so `wallet_send` is a background job (`wallet_send_status`). **Not yet run against a real network**: no testnet node here (testnet-0 has no public server), and a main-net send would spend real NPT. The HTLC ops still prove inside the request and would hit the 30 s limit on a real network |
 | M6 | Wallet screens in the capsule (Slint): address + QR, balance, history, send | **built**: create/back up/import, sync, balance, send (form → review → confirm), receive with Private (Generation) or Short (EC Hybrid, QR) addresses and New address, activity (received/sent/pending, block and time). Seen in the dev Home: balance 14.95 NPT after sync (2026-11-16); addresses, QR and activity verified on regtest through the provider (an EC Hybrid payment shows as such), not yet clicked through in Home |
 | M7 | Neptune HTLC lock/claim/refund in the provider (`crates/htlc`), swap-guard on the verified tip | **lock → claim and lock → refund done on regtest** (2026-11-16, release provider, two wallets): see "HTLC on regtest" below. swap-guard on the verified tip not wired yet; the capsule does not call the htlc ops yet (gateway list unchanged) |
-| M8 | Other leg through elastOS Wallet: the fork lets the capsule request `wallet`/`chain` approvals; EVM HTLC contract and Bitcoin HTLC script on their testnets | **EVM contract done** (`contracts/htlc-evm`, 9 forge tests; `crates/evm-htlc`, 5 tests, builds for wasm32; `scripts/evm-htlc-local.sh` lock→claim and lock→refund on local anvil, chain id 8453). **Route done**: the fork lets `neptune-intents` use the Browser app's Wallet bridge (request-accounts → request-transaction → Wallet passkey approval → broadcast-transaction, reads), bound to the calling app; the dev Home's Base is the local anvil chain (`BASE_RPC_URL`). Call sequence for the capsule: `docs/wallet-bridge.md`. Not yet: the capsule's calls (UI session), the NPT↔ETH flow through it. Bitcoin: Wallet has BTC accounts and node reads but cannot send BTC, even on develop 2026-11-16 (`wallet-send-flow.js`: EVM only) |
+| M8 | Other leg through elastOS Wallet: the fork lets the capsule request `wallet`/`chain` approvals; EVM HTLC contract and Bitcoin HTLC script on their testnets | **EVM contract done** (`contracts/htlc-evm`, 9 forge tests; `crates/evm-htlc`, 5 tests, builds for wasm32; `scripts/evm-htlc-local.sh` lock→claim and lock→refund on local anvil, chain id 8453). **Route done**: the fork lets `neptune-swap` use the Browser app's Wallet bridge (request-accounts → request-transaction → Wallet passkey approval → broadcast-transaction, reads), bound to the calling app; the dev Home's Base is the local anvil chain (`BASE_RPC_URL`). Call sequence for the capsule: `docs/wallet-bridge.md`. Not yet: the capsule's calls (UI session), the NPT↔ETH flow through it. Bitcoin: Wallet has BTC accounts and node reads but cannot send BTC, even on develop 2026-11-16 (`wallet-send-flow.js`: EVM only) |
 | M9 | Solver + transport over the carrier; end-to-end swap on regtest/testnets | **Swap done over the carrier on local chains** (`crates/solver`, `CARRIER=1 scripts/swap-e2e.sh`): every message signed, sealed to its recipient's DID and sent over the dev Home's gossip after the operator approved `elastos://peer/*` in Home; user −2.05 NPT +1 ETH less gas, solver +1.95 NPT. Not yet: two separate nodes (tickets), the capsule as the user side (peer route in the fork's gateway), the reverse direction |
 
 ## Order of work
@@ -271,7 +272,7 @@ What elastOS 2.0.1 offers (`docs/CHAIN_PROVIDER.md`, `docs/WALLET_PROVIDER.md`):
   can stand in for Base in the dev Home: Wallet signs as usual, no real money.
 - **App route:** the Browser app already has `/api/apps/browser/wallet/{request-transaction,
   read, broadcast-transaction, approvals/:id}`, gated by `require_runtime_wallet_authority(…,
-  &[BROWSER_CAPSULE_ID])`. The fork can let `neptune-intents` use the same handlers.
+  &[BROWSER_CAPSULE_ID])`. The fork can let `neptune-swap` use the same handlers.
 
 Tooling: Foundry 1.9.0 installed in `~/.foundry/bin` (2026-11-16; binaries verified against their sigstore attestations); solc 0.8.28 is fetched by forge. Local chain: `anvil --chain-id 8453 --port 8545 --host 127.0.0.1`.
 
@@ -303,7 +304,7 @@ Notes:
   buffer, not between two nodes. Two nodes: `get_ticket` on one, `gossip_join_exact` on the other.
 - A shell session without a capability token may call `peer` ops directly (orchestrator
   privilege for non-write ops); the solver does not use that and goes through the approval.
-- The capsule side still needs `peer` in the fork's gateway provider routes for `neptune-intents`.
+- The capsule side still needs `peer` in the fork's gateway provider routes for `neptune-swap`.
 - `wallet_send` proves in the background: a provider started per call exits before it sends.
   Fund test wallets with one long-lived provider process.
 

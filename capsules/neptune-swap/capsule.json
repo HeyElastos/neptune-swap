@@ -1,6 +1,6 @@
 {
   "schema": "elastos.capsule/v1",
-  "name": "neptune-intents",
+  "name": "neptune-swap",
   "version": "0.1.0",
   "description": "Swap NPT privately: say what you want, solvers compete, settle on Neptune",
   "author": "local-development",
@@ -13,7 +13,7 @@
   "entrypoint": "browser/index.html",
   "interfaces": [
     {
-      "id": "neptune.intents",
+      "id": "neptune.swap",
       "version": "0.1.0",
       "description": "Neptune Swap: compose private swaps and use the Neptune wallet",
       "methods": [
