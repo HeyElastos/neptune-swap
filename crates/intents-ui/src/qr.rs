@@ -11,7 +11,12 @@ const QUIET: usize = 2;
 /// The QR code of `text`, black on white, or None when it does not fit.
 /// Bech32 is case-insensitive; upper case uses QR's denser alphanumeric mode.
 pub fn image(text: &str) -> Option<Image> {
-    let code = QrCode::with_error_correction_level(text.to_ascii_uppercase().as_bytes(), EcLevel::M).ok()?;
+    // M where it fits; a Generation address (3,482 characters) only fits at L,
+    // in the largest version: a dense code, as the official wallet shows it too.
+    let data = text.to_ascii_uppercase();
+    let code = QrCode::with_error_correction_level(data.as_bytes(), EcLevel::M)
+        .or_else(|_| QrCode::with_error_correction_level(data.as_bytes(), EcLevel::L))
+        .ok()?;
     let modules = code.width();
     let colors = code.to_colors();
     let side = (modules + 2 * QUIET) * SCALE;
@@ -41,7 +46,8 @@ mod tests {
     }
 
     #[test]
-    fn a_generation_address_is_too_long() {
+    fn a_generation_address_fits_at_low_correction_and_more_does_not() {
+        assert!(super::image(&format!("nolgam1{}", "q".repeat(3475))).is_some());
         assert!(super::image(&"q".repeat(9000)).is_none());
     }
 }

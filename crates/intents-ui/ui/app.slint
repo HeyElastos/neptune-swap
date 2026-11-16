@@ -319,6 +319,7 @@ component WalletCard inherits VerticalLayout {
     in-out property <int> receive-kind;
     in property <image> qr;
     in property <bool> qr-shown;
+    callback paste-address();
     callback start-receive();
     callback close-view();
     callback new-address();
@@ -450,8 +451,8 @@ component WalletCard inherits VerticalLayout {
     }
     if root.state == "receive": Text {
         text: root.receive-kind == 0
-            ? "A Generation address: the most private kind. It is too long for a QR code, so copy it."
-            : "An EC Hybrid address: short enough for a QR code. Whoever knows it can see what it receives, so give each payer a new one.";
+            ? "A Generation address: the most private kind, and safe to reuse. Its QR code is dense; scan it up close, or copy the address."
+            : "An EC hybrid address: shorter and easier to share. Give each one to a single person: if it is shared widely, a future quantum computer could reveal what it received, though never spend it.";
         color: Skin.muted;
         font-size: Ty.small;
         wrap: word-wrap;
@@ -509,6 +510,10 @@ component WalletCard inherits VerticalLayout {
         placeholder: "A Neptune address";
         multi: true;
         text <=> root.send-to;
+    }
+    if root.state == "send": HorizontalLayout {
+        alignment: start;
+        Button { text: "Paste address"; primary: false; clicked => { root.paste-address(); } }
     }
     if root.state == "send": HorizontalLayout {
         spacing: Sp.m;
@@ -659,6 +664,7 @@ export component AppWindow inherits Window {
     in-out property <int> wallet-receive-kind;
     in property <image> wallet-qr;
     in property <bool> wallet-qr-shown;
+    callback wallet-paste-address();
     callback wallet-start-receive();
     callback wallet-close-view();
     callback wallet-new-address();
@@ -897,6 +903,7 @@ export component AppWindow inherits Window {
                             receive-kind <=> root.wallet-receive-kind;
                             qr: root.wallet-qr;
                             qr-shown: root.wallet-qr-shown;
+                            paste-address => { root.wallet-paste-address(); }
                             start-receive => { root.wallet-start-receive(); }
                             close-view => { root.wallet-close-view(); }
                             new-address => { root.wallet-new-address(); }

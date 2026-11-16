@@ -105,6 +105,133 @@ mod web {
         (js_sys::Date::now() / 1000.0) as u64
     }
 
+    /// A plain HTML panel over the canvas for long text: the whole address,
+    /// selected so ⌘C copies it (copying a selection needs no clipboard
+    /// permission, which Home's sandbox withholds), or a field to paste into.
+    pub mod sheet {
+        use std::cell::RefCell;
+
+        use wasm_bindgen::{closure::Closure, JsCast};
+        use web_sys::{HtmlDocument, HtmlElement, HtmlTextAreaElement};
+
+        type Done = Box<dyn FnOnce(String)>;
+        thread_local! { static DONE: RefCell<Option<Done>> = RefCell::new(None); }
+
+        const STYLE: &str = "
+#nx-sheet{position:fixed;left:12px;right:12px;bottom:12px;max-width:560px;margin:0 auto;z-index:10;
+ display:none;flex-direction:column;gap:10px;padding:16px;border-radius:18px;box-sizing:border-box;
+ font:14px -apple-system,system-ui,sans-serif;background:rgba(40,40,44,.97);color:#f5f5f7;
+ box-shadow:0 8px 28px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.1)}
+#nx-sheet.open{display:flex}
+#nx-sheet b{font-size:16px}
+#nx-sheet textarea{width:100%;box-sizing:border-box;height:120px;resize:none;border:0;outline:0;border-radius:12px;
+ padding:10px;font:12px ui-monospace,Menlo,monospace;word-break:break-all;background:rgba(255,255,255,.08);color:inherit}
+#nx-sheet textarea:focus{box-shadow:0 0 0 2px #e6b34a}
+#nx-sheet .hint{font-size:12px;opacity:.7}
+#nx-sheet .row{display:flex;justify-content:flex-end;gap:8px}
+#nx-sheet button{font:600 14px -apple-system,system-ui,sans-serif;border:0;border-radius:12px;padding:10px 16px;cursor:pointer;
+ background:rgba(255,255,255,.12);color:inherit}
+#nx-sheet button.ok{background:#e6b34a;color:#1c1c1e}
+@media (prefers-color-scheme: light){#nx-sheet{background:rgba(250,250,252,.98);color:#1c1c1e;border-color:rgba(0,0,0,.1);
+ box-shadow:0 8px 28px rgba(0,0,0,.18)}#nx-sheet textarea{background:rgba(0,0,0,.05)}#nx-sheet button{background:rgba(0,0,0,.08)}}";
+
+        fn document() -> web_sys::Document {
+            super::window().document().expect("a document")
+        }
+
+        fn element(id: &str) -> Option<HtmlElement> {
+            document().get_element_by_id(id)?.dyn_into().ok()
+        }
+
+        fn build() -> Option<()> {
+            if element("nx-sheet").is_some() {
+                return Some(());
+            }
+            let doc = document();
+            let style = doc.create_element("style").ok()?;
+            style.set_text_content(Some(STYLE));
+            doc.head()?.append_child(&style).ok()?;
+            let sheet = doc.create_element("div").ok()?;
+            sheet.set_id("nx-sheet");
+            sheet.set_inner_html(
+                "<b id=nx-title></b><textarea id=nx-text spellcheck=false autocomplete=off></textarea>\
+                 <div class=hint id=nx-hint></div><div class=row><button id=nx-close>Close</button>\
+                 <button class=ok id=nx-ok></button></div>",
+            );
+            doc.body()?.append_child(&sheet).ok()?;
+            let close = Closure::<dyn FnMut()>::new(|| hide());
+            element("nx-close")?.set_onclick(Some(close.as_ref().unchecked_ref()));
+            close.forget();
+            let ok = Closure::<dyn FnMut()>::new(|| {
+                let text = text_area().map(|t| t.value()).unwrap_or_default();
+                let done = DONE.with(|d| d.borrow_mut().take());
+                hide();
+                if let Some(done) = done {
+                    done(text);
+                }
+            });
+            element("nx-ok")?.set_onclick(Some(ok.as_ref().unchecked_ref()));
+            ok.forget();
+            Some(())
+        }
+
+        fn text_area() -> Option<HtmlTextAreaElement> {
+            document().get_element_by_id("nx-text")?.dyn_into().ok()
+        }
+
+        fn hide() {
+            if let Some(sheet) = element("nx-sheet") {
+                let _ = sheet.class_list().remove_1("open");
+            }
+            DONE.with(|d| d.borrow_mut().take());
+        }
+
+        fn open(title: &str, text: &str, editable: bool, hint: &str, ok: Option<&str>) -> Option<HtmlTextAreaElement> {
+            build()?;
+            element("nx-title")?.set_text_content(Some(title));
+            element("nx-hint")?.set_text_content(Some(hint));
+            let ok_button = element("nx-ok")?;
+            ok_button.set_text_content(ok);
+            let _ = ok_button.style().set_property("display", if ok.is_some() { "" } else { "none" });
+            let area = text_area()?;
+            area.set_value(text);
+            area.set_read_only(!editable);
+            let _ = element("nx-sheet")?.class_list().add_1("open");
+            let _ = area.focus();
+            Some(area)
+        }
+
+        /// Shows `text` whole and selected; tries a direct copy too. Returns
+        /// whether that copy went through.
+        pub fn show(title: &str, text: &str) -> bool {
+            let Some(area) = open(title, text, false, "", None) else { return false };
+            area.select();
+            let copied = document()
+                .dyn_into::<HtmlDocument>()
+                .ok()
+                .and_then(|d| d.exec_command("copy").ok())
+                .unwrap_or(false);
+            if let Some(hint) = element("nx-hint") {
+                hint.set_text_content(Some(if copied {
+                    "Copied. It is also selected here."
+                } else {
+                    "Selected. Press ⌘C (Ctrl+C) to copy it."
+                }));
+            }
+            copied
+        }
+
+        /// A field to paste into; `done` gets the text when the user confirms.
+        pub fn ask(title: &str, current: &str, hint: &str, ok: &str, done: Done) {
+            DONE.with(|d| *d.borrow_mut() = Some(done));
+            if let Some(area) = open(title, current, true, hint, Some(ok)) {
+                area.select();
+            }
+        }
+    }
+
+    pub use sheet::{ask as ask_text, show as show_text};
+
     /// Waits `ms` milliseconds without blocking the page.
     pub async fn sleep_ms(ms: u32) {
         let promise = js_sys::Promise::new(&mut |resolve, _| {
@@ -214,7 +341,7 @@ mod web {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{announce, copy_text, format_time, home_token, listen_clipboard, now_secs, provider, query, sleep_ms};
+pub use web::{announce, ask_text, copy_text, format_time, home_token, listen_clipboard, now_secs, provider, query, show_text, sleep_ms};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn home_token() -> Option<String> {
@@ -231,6 +358,15 @@ pub fn announce(_token: &str) {}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn listen_clipboard() {}
+
+/// Natively the development window has no HTML to show text in.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn show_text(_title: &str, _text: &str) -> bool {
+    false
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn ask_text(_title: &str, _current: &str, _hint: &str, _ok: &str, _done: Box<dyn FnOnce(String)>) {}
 
 /// Natively there is no provider to wait for.
 #[cfg(not(target_arch = "wasm32"))]

@@ -115,6 +115,24 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
         app.on_wallet_confirm_send(move || spawn(send(weak.clone(), page.clone())));
     }
     {
+        let weak = app.as_weak();
+        app.on_wallet_paste_address(move || {
+            let current = weak.upgrade().map(|app| app.get_wallet_send_to().to_string()).unwrap_or_default();
+            let weak = weak.clone();
+            runtime::ask_text(
+                "Address to pay",
+                &current,
+                "Paste the address (⌘V or Ctrl+V), then choose Use.",
+                "Use",
+                Box::new(move |text| {
+                    if let Some(app) = weak.upgrade() {
+                        app.set_wallet_send_to(text.split_whitespace().collect::<String>().into());
+                    }
+                }),
+            );
+        });
+    }
+    {
         let (weak, page) = on(&page);
         app.on_wallet_start_receive(move || {
             let app = weak.unwrap();
@@ -157,19 +175,27 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
     {
         let (weak, page) = on(&page);
         app.on_wallet_copy_address(move || {
-            let (token, address) = {
+            let (token, address, kind) = {
                 let p = page.borrow();
                 let kind = weak.upgrade().map_or(0, |app| app.get_wallet_receive_kind() as usize).min(1);
-                (p.token.clone().unwrap_or_default(), p.addresses[kind].clone())
+                (p.token.clone().unwrap_or_default(), p.addresses[kind].clone(), kind)
             };
-            let weak = weak.clone();
-            runtime::copy_text(&token, "neptune.address", &address, Box::new(move |result| {
-                let Some(app) = weak.upgrade() else { return };
-                app.set_wallet_copy_note(match result {
-                    Ok(()) => "Copied.".into(),
-                    Err(_) => "This Home did not let the app copy. Select the address instead.".into(),
-                });
-            }));
+            // The whole address, selected, in a plain HTML panel: ⌘C copies a
+            // selection without any clipboard permission. Home's bridge is
+            // tried as well, for one-click copying where Home allows it.
+            let title = if kind == 0 { "Your Generation address" } else { "Your EC hybrid address" };
+            let copied = runtime::show_text(title, &address);
+            if let Some(app) = weak.upgrade() {
+                app.set_wallet_copy_note(SharedString::new());
+            }
+            if !copied {
+                let weak = weak.clone();
+                runtime::copy_text(&token, "neptune.address", &address, Box::new(move |result| {
+                    if let (Ok(()), Some(app)) = (result, weak.upgrade()) {
+                        app.set_wallet_copy_note("Copied.".into());
+                    }
+                }));
+            }
         });
     }
 }
@@ -407,7 +433,7 @@ fn show_receive(weak: &Weak<AppWindow>, page: &Shared) {
     let kind = (app.get_wallet_receive_kind() as usize).min(1);
     let address = page.borrow().addresses[kind].clone();
     app.set_wallet_address_short(shorten(&address).into());
-    let qr = (kind == 1 && !address.is_empty()).then(|| crate::qr::image(&address)).flatten();
+    let qr = (!address.is_empty()).then(|| crate::qr::image(&address)).flatten();
     app.set_wallet_qr_shown(qr.is_some());
     if let Some(image) = qr {
         app.set_wallet_qr(image);
@@ -536,7 +562,7 @@ pub fn demo(app: &AppWindow, state: &str) {
     app.set_page(1);
     // After the page change's own load has run (outside Home it finds no wallet).
     let (weak, state) = (app.as_weak(), state.to_string());
-    slint::Timer::single_shot(std::time::Duration::from_millis(200), move || demo_state(&weak.unwrap(), &state));
+    slint::Timer::single_shot(std::time::Duration::from_millis(1000), move || demo_state(&weak.unwrap(), &state));
 }
 
 fn demo_state(app: &AppWindow, state: &str) {
