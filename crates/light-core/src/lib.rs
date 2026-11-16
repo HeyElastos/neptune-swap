@@ -11,6 +11,7 @@
 //! for those, like neptune-wallet-app does.
 
 pub mod rpc;
+pub mod tip;
 
 use std::collections::HashMap;
 
@@ -374,3 +375,5 @@ fn index_set_of(coin: &Coin) -> AbsoluteIndexSet {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tip_tests;

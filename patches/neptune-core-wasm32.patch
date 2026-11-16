@@ -92,6 +92,30 @@ index e33f6df..119bd85 100644
              .enable_all()
              .thread_name("triton-vm-job-queue")
              .build()
+diff --git a/neptune-consensus/src/proof_abstractions/verifier.rs b/neptune-consensus/src/proof_abstractions/verifier.rs
+index 3f17cf1..a2316b5 100644
+--- a/neptune-consensus/src/proof_abstractions/verifier.rs
++++ b/neptune-consensus/src/proof_abstractions/verifier.rs
+@@ -4,6 +4,7 @@ use tasm_lib::triton_vm::proof::Claim;
+ use tasm_lib::triton_vm::proof::Proof as VmProof;
+ use tasm_lib::triton_vm::proof_stream::ProofStream;
+ use tasm_lib::triton_vm::stark::Stark;
++#[cfg(not(target_arch = "wasm32"))]
+ use tokio::task;
+ use tracing::warn;
+ 
+@@ -140,6 +141,11 @@ async fn verify_inner(
+     #[cfg(test)]
+     let claim_clone = claim.clone();
+ 
++    // wasm32 (light wallet patch): no threads for a blocking pool, so the
++    // verifier runs on the calling thread.
++    #[cfg(target_arch = "wasm32")]
++    let verdict = verify_sync(&claim, &VmProof::from(proof));
++    #[cfg(not(target_arch = "wasm32"))]
+     let verdict = task::spawn_blocking(move || verify_sync(&claim, &VmProof::from(proof)))
+         .await
+         .expect("should be able to verify proof in new tokio task");
 diff --git a/neptune-primitives/Cargo.toml b/neptune-primitives/Cargo.toml
 index 64455d4..51ec909 100644
 --- a/neptune-primitives/Cargo.toml

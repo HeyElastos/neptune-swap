@@ -14,6 +14,8 @@ use neptune_rpc_api::model::message::BlockHeightsByFlagsResponse;
 use neptune_rpc_api::model::message::GetBlocksRequest;
 use neptune_rpc_api::model::message::GetBlocksResponse;
 use neptune_rpc_api::model::message::HeightResponse;
+use neptune_rpc_api::model::message::TipResponse;
+use neptune_rpc_api::model::block::RpcBlock;
 use neptune_rpc_api::model::wallet::block::RpcWalletBlock;
 use neptune_mutator_set::removal_record::absolute_index_set::AbsoluteIndexSet;
 use serde::de::DeserializeOwned;
@@ -34,6 +36,11 @@ fn body(method: &str, params: impl Serialize) -> String {
 
 pub fn height_request() -> String {
     body("chain_height", json!([]))
+}
+
+/// The tip as a full block with its proof (~2.5 MB of JSON on main net).
+pub fn tip_request() -> String {
+    body("chain_tip", json!([]))
 }
 
 pub fn get_blocks_request(from: u64, to: u64) -> String {
@@ -65,6 +72,10 @@ fn result<T: DeserializeOwned>(response: &str) -> Result<T> {
 
 pub fn parse_height(response: &str) -> Result<u64> {
     Ok(result::<HeightResponse>(response)?.height.into())
+}
+
+pub fn parse_tip(response: &str) -> Result<RpcBlock> {
+    Ok(result::<TipResponse>(response)?.block)
 }
 
 pub fn parse_blocks(response: &str) -> Result<Vec<RpcWalletBlock>> {

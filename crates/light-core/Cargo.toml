@@ -24,6 +24,10 @@ getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
+# Tip-verification tests: real main-net fixtures (gzipped) and a runtime for the
+# verifier's spawn_blocking.
+flate2 = "1"
+tokio = { version = "1.47", features = ["rt-multi-thread", "macros"] }
 # Fake blocks for the scanner tests (neptune_wallet::mock_block's pattern).
 neptune-wallet = { workspace = true, features = ["test-helpers"] }
 neptune-consensus = { workspace = true, features = ["test-helpers"] }
