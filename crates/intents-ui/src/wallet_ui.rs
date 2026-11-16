@@ -72,6 +72,42 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
         app.on_wallet_sync(move || spawn(sync(weak.clone(), page.clone())));
     }
     {
+        let weak = app.as_weak();
+        app.on_wallet_start_send(move || {
+            let app = weak.unwrap();
+            app.set_wallet_error(SharedString::new());
+            app.set_wallet_notice(SharedString::new());
+            app.set_wallet_state("send".into());
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_wallet_cancel_send(move || {
+            let app = weak.unwrap();
+            app.set_wallet_error(SharedString::new());
+            let back = if app.get_wallet_state() == "confirm" { "send" } else { "ready" };
+            app.set_wallet_state(back.into());
+        });
+    }
+    {
+        let weak = app.as_weak();
+        app.on_wallet_review_send(move || {
+            let app = weak.unwrap();
+            match check_payment(&app.get_wallet_send_to(), &app.get_wallet_send_amount(), &app.get_wallet_send_fee()) {
+                Ok(summary) => {
+                    app.set_wallet_error(SharedString::new());
+                    app.set_wallet_send_summary(summary.into());
+                    app.set_wallet_state("confirm".into());
+                }
+                Err(message) => app.set_wallet_error(message.into()),
+            }
+        });
+    }
+    {
+        let (weak, page) = on(&page);
+        app.on_wallet_confirm_send(move || spawn(send(weak.clone(), page.clone())));
+    }
+    {
         let (weak, page) = on(&page);
         app.on_wallet_copy_address(move || {
             let (token, address) = {
@@ -227,6 +263,62 @@ async fn sync(weak: Weak<AppWindow>, page: Shared) {
     }
 }
 
+async fn send(weak: Weak<AppWindow>, page: Shared) {
+    let Some(app) = weak.upgrade() else { return };
+    let body = json!({
+        "to": app.get_wallet_send_to().split_whitespace().collect::<String>(),
+        "amount": app.get_wallet_send_amount().trim(),
+        "fee": app.get_wallet_send_fee().trim(),
+    });
+    app.set_wallet_busy(true);
+    app.set_wallet_error(SharedString::new());
+    drop(app);
+    match call(&weak, &page, "wallet_send", body).await {
+        Ok(sent) => {
+            if let Some(app) = weak.upgrade() {
+                app.set_wallet_send_to(SharedString::new());
+                app.set_wallet_send_amount(SharedString::new());
+                app.set_wallet_state("ready".into());
+                app.set_wallet_notice(
+                    format!(
+                        "Sent {} NPT. It counts once a block includes it; {} NPT change comes back to this wallet.",
+                        sent["sent"].as_str().unwrap_or("?"),
+                        sent["change"].as_str().unwrap_or("0"),
+                    )
+                    .into(),
+                );
+            }
+            sync(weak, page).await;
+        }
+        Err(message) => fail(&weak, message),
+    }
+}
+
+/// The review line for a payment, or what is wrong with the form.
+pub(crate) fn check_payment(to: &str, amount: &str, fee: &str) -> Result<String, String> {
+    let to: String = to.split_whitespace().collect();
+    if to.is_empty() {
+        return Err("Enter the address to pay.".into());
+    }
+    if !to.starts_with("nolga") {
+        return Err("That is not a Neptune address.".into());
+    }
+    let positive = |text: &str| {
+        let t = text.trim();
+        !t.is_empty()
+            && t.chars().all(|c| c.is_ascii_digit() || c == '.')
+            && t.matches('.').count() <= 1
+            && t.chars().any(|c| c.is_ascii_digit() && c != '0')
+    };
+    if !positive(amount) {
+        return Err("Enter an amount above zero, like 1.5.".into());
+    }
+    if !(positive(fee) || fee.trim().chars().all(|c| c == '0' || c == '.')) || fee.trim().is_empty() {
+        return Err("Enter a fee, like 0.05.".into());
+    }
+    Ok(format!("Pay {} NPT to {}, with a fee of {} NPT.", amount.trim(), shorten(&to), fee.trim()))
+}
+
 fn show_address(weak: &Weak<AppWindow>, page: &Shared, address: &str) {
     page.borrow_mut().address = address.to_string();
     if let Some(app) = weak.upgrade() {
@@ -279,6 +371,16 @@ fn demo_state(app: &AppWindow, state: &str) {
             app.set_wallet_state("import".into());
             app.set_wallet_import_height("62000".into());
         }
+        "wallet-send" => {
+            app.set_wallet_state("send".into());
+            app.set_wallet_send_to(format!("nolgar1{}", "q".repeat(400)).into());
+            app.set_wallet_send_amount("10".into());
+        }
+        "wallet-confirm" => {
+            app.set_wallet_state("confirm".into());
+            let summary = check_payment(&format!("nolgar1{}", "q".repeat(400)), "10", "0.05").unwrap_or_default();
+            app.set_wallet_send_summary(summary.into());
+        }
         "wallet-phrase" => {
             let words: Vec<String> = "abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire"
                 .split(' ')
@@ -316,6 +418,19 @@ mod tests {
         assert_eq!(rows.len(), 6);
         assert_eq!(rows[0].a, "1. w1");
         assert_eq!(rows[5].c, "18. w18");
+    }
+
+    #[test]
+    fn payments_are_checked_before_review() {
+        let to = format!("nolgar1{}", "q".repeat(200));
+        let ok = check_payment(&to, "10", "0.05").unwrap();
+        assert!(ok.starts_with("Pay 10 NPT to nolgar1") && ok.ends_with("with a fee of 0.05 NPT."));
+        assert!(check_payment("", "1", "0.05").is_err());
+        assert!(check_payment("bc1qxyz", "1", "0.05").is_err());
+        assert!(check_payment(&to, "0", "0.05").is_err());
+        assert!(check_payment(&to, "-1", "0.05").is_err());
+        assert!(check_payment(&to, "1.2.3", "0.05").is_err());
+        assert!(check_payment(&to, "1", "").is_err());
     }
 
     #[test]

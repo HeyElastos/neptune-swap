@@ -239,6 +239,16 @@ component WalletCard inherits VerticalLayout {
     in property <string> copy-note;
     in-out property <string> import-phrase;
     in-out property <string> import-height;
+    // Sending: the form, then a review of exactly what will be paid.
+    in-out property <string> send-to;
+    in-out property <string> send-amount;
+    in-out property <string> send-fee;
+    in property <string> send-summary;
+    in property <string> notice;
+    callback start-send();
+    callback cancel-send();
+    callback review-send();
+    callback confirm-send();
     callback create();
     callback start-import();
     callback cancel-import();
@@ -337,6 +347,7 @@ component WalletCard inherits VerticalLayout {
             horizontal-stretch: 1;
         }
         Button { text: root.busy ? "Syncing…" : "Sync"; primary: false; enabled: !root.busy; clicked => { root.sync(); } }
+        Button { text: "Send"; enabled: !root.busy; clicked => { root.start-send(); } }
     }
     if root.state == "ready": Rectangle {
         border-radius: Rad.ctrl;
@@ -360,6 +371,52 @@ component WalletCard inherits VerticalLayout {
                 Button { text: "Copy address"; primary: false; clicked => { root.copy-address(); } }
             }
         }
+    }
+
+    if root.state == "ready" && root.notice != "": Text { text: root.notice; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+
+    // Send: the form.
+    if root.state == "send": Text { text: "Send NPT"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
+    if root.state == "send": Field {
+        label: "To";
+        placeholder: "A Neptune address";
+        multi: true;
+        text <=> root.send-to;
+    }
+    if root.state == "send": HorizontalLayout {
+        spacing: Sp.m;
+        Field { label: "Amount (NPT)"; placeholder: "0"; text <=> root.send-amount; }
+        Field { label: "Fee (NPT)"; placeholder: "0.05"; text <=> root.send-fee; }
+    }
+    if root.state == "send": HorizontalLayout {
+        alignment: end;
+        spacing: Sp.s;
+        Button { text: "Cancel"; primary: false; clicked => { root.cancel-send(); } }
+        Button { text: "Review"; clicked => { root.review-send(); } }
+    }
+
+    // Send: the review. Nothing leaves before Confirm.
+    if root.state == "confirm": Text { text: "Confirm payment"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
+    if root.state == "confirm": Rectangle {
+        border-radius: Rad.ctrl;
+        background: Skin.on-glass;
+        height: summary.preferred-height;
+        summary := VerticalLayout {
+            padding: Sp.m;
+            Text { text: root.send-summary; color: Skin.ink; font-size: Ty.body; wrap: word-wrap; }
+        }
+    }
+    if root.state == "confirm": Text {
+        text: "A payment cannot be undone. Check the address before you confirm.";
+        color: Skin.muted;
+        font-size: Ty.small;
+        wrap: word-wrap;
+    }
+    if root.state == "confirm": HorizontalLayout {
+        alignment: end;
+        spacing: Sp.s;
+        Button { text: "Back"; primary: false; enabled: !root.busy; clicked => { root.cancel-send(); } }
+        Button { text: root.busy ? "Sending…" : "Confirm and send"; enabled: !root.busy; clicked => { root.confirm-send(); } }
     }
 
     if root.error != "": Text {
@@ -463,6 +520,15 @@ export component AppWindow inherits Window {
     in property <string> wallet-copy-note;
     in-out property <string> wallet-import-phrase;
     in-out property <string> wallet-import-height;
+    in-out property <string> wallet-send-to;
+    in-out property <string> wallet-send-amount;
+    in-out property <string> wallet-send-fee: "0.05";
+    in property <string> wallet-send-summary;
+    in property <string> wallet-notice;
+    callback wallet-start-send();
+    callback wallet-cancel-send();
+    callback wallet-review-send();
+    callback wallet-confirm-send();
     callback wallet-create();
     callback wallet-start-import();
     callback wallet-cancel-import();
@@ -670,6 +736,15 @@ export component AppWindow inherits Window {
                             copy-note: root.wallet-copy-note;
                             import-phrase <=> root.wallet-import-phrase;
                             import-height <=> root.wallet-import-height;
+                            send-to <=> root.wallet-send-to;
+                            send-amount <=> root.wallet-send-amount;
+                            send-fee <=> root.wallet-send-fee;
+                            send-summary: root.wallet-send-summary;
+                            notice: root.wallet-notice;
+                            start-send => { root.wallet-start-send(); }
+                            cancel-send => { root.wallet-cancel-send(); }
+                            review-send => { root.wallet-review-send(); }
+                            confirm-send => { root.wallet-confirm-send(); }
                             create => { root.wallet-create(); }
                             start-import => { root.wallet-start-import(); }
                             cancel-import => { root.wallet-cancel-import(); }
