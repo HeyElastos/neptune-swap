@@ -120,6 +120,12 @@ enum Request {
 #[serde(deny_unknown_fields)]
 struct Config {
     networks: Vec<NetworkConfig>,
+    /// Development only: also accept `https://<host>` nodes. This breaks the
+    /// project's "no domains" rule (the node sees this machine's address and
+    /// the blocks it fetches) and is meant for testing against main net
+    /// before an own node runs here.
+    #[serde(default)]
+    allow_remote_nodes: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,22 +133,24 @@ struct Config {
 struct NetworkConfig {
     /// For example `neptune-main` or `neptune-testnet`.
     id: String,
-    /// `http://<loopback IP>:<port>` of the node's `--listen-rpc`.
+    /// `http://<loopback IP>:<port>` of the node's `--listen-rpc` (or, with
+    /// `allow_remote_nodes`, `https://<host>`).
     rpc: String,
 }
 
 struct Network {
     id: String,
     chain: Chain,
-    rpc: SocketAddr,
+    /// The node's JSON-RPC URL, ending in `/`.
+    rpc: String,
 }
 
-/// The node of one network, over loopback JSON-RPC.
-struct HttpNode(SocketAddr);
+/// The node of one network, over JSON-RPC.
+struct HttpNode(String);
 
 impl Node for HttpNode {
     fn call(&self, body: String) -> anyhow::Result<String> {
-        let reply = ureq::post(&format!("http://{}/", self.0))
+        let reply = ureq::post(&self.0)
             .timeout(BLOCKS_TIMEOUT)
             .set("content-type", "application/json")
             .send_string(&body)
@@ -212,14 +220,14 @@ impl Provider {
             Request::Status { network } => self.status(&network),
             Request::WalletStatus { network } => self.wallet(&network, |w, n| w.wallets.status(&n.id, n.chain)),
             Request::WalletCreate { network } => {
-                self.wallet(&network, |w, n| w.wallets.create(&n.id, n.chain, &HttpNode(n.rpc)))
+                self.wallet(&network, |w, n| w.wallets.create(&n.id, n.chain, &HttpNode(n.rpc.clone())))
             }
             Request::WalletImport { network, phrase, from_height } => self.wallet(&network, |w, n| {
-                w.wallets.import(&n.id, n.chain, &phrase, from_height, &HttpNode(n.rpc))
+                w.wallets.import(&n.id, n.chain, &phrase, from_height, &HttpNode(n.rpc.clone()))
             }),
             Request::WalletReceive { network } => self.wallet(&network, |w, n| w.wallets.receive(&n.id, n.chain)),
             Request::WalletSync { network } => {
-                self.wallet(&network, |w, n| w.wallets.sync(&n.id, n.chain, &HttpNode(n.rpc)))
+                self.wallet(&network, |w, n| w.wallets.sync(&n.id, n.chain, &HttpNode(n.rpc.clone())))
             }
             Request::WalletBalance { network } => {
                 self.wallet(&network, |w, n| w.wallets.balance(&n.id, n.chain, now_ms()))
@@ -230,21 +238,21 @@ impl Provider {
             }
             Request::WalletHistory { network } => self.wallet(&network, |w, n| w.wallets.history(&n.id, n.chain)),
             Request::WalletSend { network, to, amount, fee } => self.wallet(&network, |w, n| {
-                w.wallets.send(&n.id, n.chain, &to, &amount, &fee, now_ms(), &HttpNode(n.rpc))
+                w.wallets.send(&n.id, n.chain, &to, &amount, &fee, now_ms(), &HttpNode(n.rpc.clone()))
             }),
             Request::HtlcClaimLock { network } => self.wallet(&network, |w, n| w.wallets.htlc_claim_lock(&n.id, n.chain)),
             Request::HtlcLock { network, amount, fee, claim_lock, refund_after_ms } => self.wallet(&network, |w, n| {
-                w.wallets.htlc_lock(&n.id, n.chain, &amount, &fee, &claim_lock, refund_after_ms, now_ms(), &HttpNode(n.rpc))
+                w.wallets.htlc_lock(&n.id, n.chain, &amount, &fee, &claim_lock, refund_after_ms, now_ms(), &HttpNode(n.rpc.clone()))
             }),
             Request::HtlcStatus { network, swap_id, note, from_height } => self.wallet(&network, |w, n| {
-                w.wallets.htlc_status(&n.id, swap_id.as_deref(), note, from_height, &HttpNode(n.rpc))
+                w.wallets.htlc_status(&n.id, swap_id.as_deref(), note, from_height, &HttpNode(n.rpc.clone()))
             }),
             Request::HtlcSecret { network, swap_id } => self.wallet(&network, |w, n| w.wallets.htlc_secret(&n.id, &swap_id)),
             Request::HtlcClaim { network, note, preimage, claim_index, fee, from_height } => self.wallet(&network, |w, n| {
-                w.wallets.htlc_claim(&n.id, n.chain, note, &preimage, claim_index, &fee, from_height, now_ms(), &HttpNode(n.rpc))
+                w.wallets.htlc_claim(&n.id, n.chain, note, &preimage, claim_index, &fee, from_height, now_ms(), &HttpNode(n.rpc.clone()))
             }),
             Request::HtlcRefund { network, swap_id, fee } => self.wallet(&network, |w, n| {
-                w.wallets.htlc_refund(&n.id, n.chain, &swap_id, &fee, now_ms(), &HttpNode(n.rpc))
+                w.wallets.htlc_refund(&n.id, n.chain, &swap_id, &fee, now_ms(), &HttpNode(n.rpc.clone()))
             }),
             Request::Shutdown {} => ok(None),
         }
@@ -259,7 +267,10 @@ impl Provider {
             if !id_ok {
                 return Err(format!("network id {:?} must be neptune-<a-z0-9->", network.id));
             }
-            let rpc = loopback_rpc(&network.rpc)?;
+            let rpc = node_url(&network.rpc, config.allow_remote_nodes)?;
+            if !rpc.starts_with("http://") {
+                eprintln!("neptune-provider: {} uses a remote node (development only)", network.id);
+            }
             let chain = chain_of(&network.id)?;
             networks.push(Network { id: network.id, chain, rpc });
         }
@@ -283,7 +294,7 @@ impl Provider {
         let Some(found) = self.networks.iter().find(|n| n.id == network) else {
             return error("unknown_network", &format!("{network} is not configured"));
         };
-        match chain_height(found.rpc) {
+        match chain_height(&found.rpc) {
             Ok(height) => ok(Some(json!({ "network": found.id, "height": height }))),
             Err((code, message)) => error(code, &message),
         }
@@ -301,28 +312,35 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
-/// Accepts only `http://<loopback IP literal>:<port>`. Host names are refused,
-/// so the provider never resolves DNS or reaches a remote node.
-fn loopback_rpc(rpc: &str) -> Result<SocketAddr, String> {
+/// The node URL for `rpc`. By default only `http://<loopback IP literal>:<port>`:
+/// host names are refused, so the provider never resolves DNS or reaches a
+/// remote node. With `allow_remote` (development), `https://<host>[:port]` too.
+fn node_url(rpc: &str, allow_remote: bool) -> Result<String, String> {
     let refused = || format!("rpc {rpc:?} must be http://<loopback IP>:<port>");
-    let host_port = rpc.strip_prefix("http://").ok_or_else(refused)?.trim_end_matches('/');
-    let addr: SocketAddr = host_port.parse().map_err(|_| refused())?;
-    if addr.ip().is_loopback() {
-        Ok(addr)
-    } else {
-        Err(refused())
+    if let Some(host_port) = rpc.strip_prefix("http://") {
+        let addr: SocketAddr = host_port.trim_end_matches('/').parse().map_err(|_| refused())?;
+        return if addr.ip().is_loopback() { Ok(format!("http://{addr}/")) } else { Err(refused()) };
     }
+    if let Some(host) = rpc.strip_prefix("https://").map(|h| h.trim_end_matches('/')) {
+        if !allow_remote {
+            return Err(refused());
+        }
+        let valid = !host.is_empty()
+            && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':'));
+        return if valid { Ok(format!("https://{host}/")) } else { Err(refused()) };
+    }
+    Err(refused())
 }
 
 /// Errors carry only a fixed message: transport details name the node's
 /// address, which stays in the provider's log.
-fn chain_height(rpc: SocketAddr) -> Result<u64, (&'static str, String)> {
+fn chain_height(rpc: &str) -> Result<u64, (&'static str, String)> {
     let unreachable = |e: &dyn std::fmt::Display| {
         eprintln!("neptune-provider: node request failed: {e}");
         ("node_unreachable", "The local Neptune node did not answer.".to_string())
     };
     let request = json!({ "jsonrpc": "2.0", "id": 1, "method": "chain_height", "params": [] });
-    let reply = ureq::post(&format!("http://{rpc}/"))
+    let reply = ureq::post(rpc)
         .timeout(NODE_TIMEOUT)
         .set("content-type", "application/json")
         .send_string(&request.to_string())

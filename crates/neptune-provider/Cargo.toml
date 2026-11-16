@@ -8,7 +8,8 @@ description = "elastOS Runtime provider for elastos://neptune/*: typed Neptune r
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-ureq = { version = "2", default-features = false }
+# tls: only for a development remote node (allow_remote_nodes); local nodes are plain http.
+ureq = { version = "2", default-features = false, features = ["tls"] }
 light-core = { path = "../light-core" }
 anyhow.workspace = true
 tokio = { version = "1.47", features = ["rt"] }

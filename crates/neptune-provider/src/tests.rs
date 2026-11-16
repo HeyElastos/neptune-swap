@@ -123,3 +123,19 @@ fn the_runtime_bridge_init_keeps_the_startup_networks() {
     let networks = call(&mut provider, json!({ "op": "networks" }));
     assert_eq!(networks["data"]["networks"][0]["id"], "neptune-testnet");
 }
+
+#[test]
+fn remote_nodes_need_the_development_flag() {
+    let mut provider = Provider::default();
+    let remote = json!({ "networks": [{ "id": "neptune-main", "rpc": "https://node.example.org" }] });
+    let refused = call(&mut provider, json!({ "op": "init", "config": remote }));
+    assert_eq!(refused["status"], "error");
+    let mut allowed = remote.clone();
+    allowed["allow_remote_nodes"] = json!(true);
+    assert_eq!(call(&mut provider, json!({ "op": "init", "config": allowed }))["status"], "ok");
+    // Still no plain http to a remote host, and no paths or odd characters.
+    for rpc in ["http://node.example.org", "https://node.example.org/x?y", "https://", "ftp://h"] {
+        let config = json!({ "allow_remote_nodes": true, "networks": [{ "id": "neptune-main", "rpc": rpc }] });
+        assert_eq!(call(&mut provider, json!({ "op": "init", "config": config }))["status"], "error", "{rpc}");
+    }
+}
