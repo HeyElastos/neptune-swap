@@ -7,7 +7,7 @@ set -eu
 cd "$(dirname "$0")/.."
 cargo build -p intents-ui >/dev/null 2>&1 || cargo build -p intents-ui
 mkdir -p screenshots
-STATES="${*:-form asset node review wallet-none wallet-phrase wallet-import wallet-ready wallet-send wallet-confirm}"
+STATES="${*:-form asset node review wallet-none wallet-phrase wallet-import wallet-ready wallet-send wallet-confirm wallet-receive wallet-addresses}"
 for look in dark light; do
   for state in $STATES; do
     out="screenshots/$look-$state${SIZE:+-$SIZE}.png"

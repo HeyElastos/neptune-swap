@@ -259,6 +259,14 @@ fn new_addresses_are_fresh_and_still_receive() {
     assert!(kinds.contains(&Some("ec_hybrid")) && kinds.contains(&Some("generation")));
     let short = w.current_address(history::AddressKind::EcHybrid).unwrap();
     assert!(short.address.len() < 400, "an EC Hybrid address is short: {}", short.address.len());
+
+    // Every handed-out address is listed, newest first, with what it received.
+    let listed = w.issued_addresses(history::AddressKind::Generation).unwrap();
+    assert_eq!(listed.len(), 41);
+    assert_eq!((listed[0].index, listed[0].current, listed[0].payments, listed[0].received.as_str()), (40, true, 1, "3"));
+    assert_eq!((listed[40].index, listed[40].payments, listed[40].address.clone()), (0, 0, first.address));
+    let shorts = w.issued_addresses(history::AddressKind::EcHybrid).unwrap();
+    assert_eq!((shorts.len(), shorts[0].payments, shorts[0].received.as_str()), (1, 1, "1"));
 }
 
 #[test]

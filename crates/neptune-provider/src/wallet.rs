@@ -258,6 +258,11 @@ impl Wallets {
         Ok(json!({
             "generation": wallet.current_address(AddressKind::Generation)?,
             "ec_hybrid": wallet.current_address(AddressKind::EcHybrid)?,
+            // Every address handed out, newest first, with what each received.
+            "issued": {
+                "generation": wallet.issued_addresses(AddressKind::Generation)?,
+                "ec_hybrid": wallet.issued_addresses(AddressKind::EcHybrid)?,
+            },
         }))
     }
 
@@ -513,7 +518,14 @@ mod tests {
         assert_eq!(fresh["index"], 1);
         assert_ne!(fresh["address"], created["address"]);
         // Kept across loads, and the status shows the new one.
-        assert_eq!(wallets.addresses("neptune-main", Network::Main).unwrap()["generation"]["index"], 1);
+        let addresses = wallets.addresses("neptune-main", Network::Main).unwrap();
+        assert_eq!(addresses["generation"]["index"], 1);
+        // Both stay listed, newest first; the short kind still has only its first.
+        let issued = addresses["issued"]["generation"].as_array().unwrap();
+        assert_eq!(issued.len(), 2);
+        assert_eq!((issued[0]["index"].clone(), issued[0]["current"].clone()), (json!(1), json!(true)));
+        assert_eq!((issued[1]["address"].clone(), issued[1]["payments"].clone()), (created["address"].clone(), json!(0)));
+        assert_eq!(addresses["issued"]["ec_hybrid"].as_array().unwrap().len(), 1);
         assert_eq!(wallets.status("neptune-main", Network::Main).unwrap()["address"], fresh["address"]);
         assert!(wallets.new_address("neptune-main", Network::Main, "taproot").is_err());
 

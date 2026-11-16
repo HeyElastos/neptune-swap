@@ -7,7 +7,7 @@ use std::rc::Rc;
 use serde_json::{json, Value};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Weak};
 
-use crate::{runtime, spawn, ActivityRow, AppWindow, WordRow};
+use crate::{runtime, spawn, ActivityRow, AddressRow, AppWindow, WordRow};
 
 /// Address kinds, as the receive switch numbers them and the provider names them.
 const KINDS: [&str; 2] = ["generation", "ec_hybrid"];
@@ -18,8 +18,12 @@ const OVERVIEW_ROWS: usize = 5;
 #[derive(Default)]
 struct Page {
     token: Option<String>,
-    /// The full current address of each kind, for copying; the card shows it shortened.
+    /// The full address of each kind the receive view shows (the current one,
+    /// or an earlier one opened from the list), for copying.
     addresses: [String; 2],
+    /// Every address of each kind handed out, newest first, as the provider
+    /// lists them (index, address, payments, received, current).
+    issued: [Vec<Value>; 2],
     /// Every payment, newest first.
     activity: Vec<ActivityRow>,
 }
@@ -147,8 +151,35 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
         app.on_wallet_receive_kind_changed(move |_| {
             if let Some(app) = weak.upgrade() {
                 app.set_wallet_copy_note(SharedString::new());
+                if app.get_wallet_state() == "addresses" {
+                    show_address_rows(&app, &page);
+                    return;
+                }
             }
             show_receive(&weak, &page);
+        });
+    }
+    {
+        let (weak, page) = on(&page);
+        app.on_wallet_show_addresses(move || {
+            let app = weak.unwrap();
+            app.set_wallet_copy_note(SharedString::new());
+            show_address_rows(&app, &page);
+            app.set_wallet_state("addresses".into());
+        });
+    }
+    {
+        let (weak, page) = on(&page);
+        app.on_wallet_open_address(move |row| {
+            let app = weak.unwrap();
+            let kind = (app.get_wallet_receive_kind() as usize).min(1);
+            let address = page.borrow().issued[kind].get(row as usize).and_then(|a| a["address"].as_str()).map(str::to_string);
+            if let Some(address) = address {
+                page.borrow_mut().addresses[kind] = address;
+                app.set_wallet_state("receive".into());
+                drop(app);
+                show_receive(&weak, &page);
+            }
         });
     }
     {
@@ -401,6 +432,7 @@ async fn load_addresses(weak: Weak<AppWindow>, page: Shared) {
                     if let Some(address) = reply[*kind]["address"].as_str() {
                         p.addresses[i] = address.to_string();
                     }
+                    p.issued[i] = reply["issued"][*kind].as_array().cloned().unwrap_or_default();
                 }
             }
             show_receive(&weak, &page);
@@ -416,9 +448,9 @@ async fn new_address(weak: Weak<AppWindow>, page: Shared) {
     app.set_wallet_copy_note(SharedString::new());
     drop(app);
     match call(&weak, &page, "wallet_new_address", json!({ "kind": KINDS[kind] })).await {
-        Ok(reply) => {
-            page.borrow_mut().addresses[kind] = reply["address"].as_str().unwrap_or_default().to_string();
-            show_receive(&weak, &page);
+        Ok(_) => {
+            // The list (and with it the label) now has the new one first.
+            load_addresses(weak.clone(), page.clone()).await;
             if let Some(app) = weak.upgrade() {
                 app.set_wallet_busy(false);
                 app.set_wallet_copy_note("A new address. Earlier ones still receive.".into());
@@ -434,11 +466,49 @@ fn show_receive(weak: &Weak<AppWindow>, page: &Shared) {
     let kind = (app.get_wallet_receive_kind() as usize).min(1);
     let address = page.borrow().addresses[kind].clone();
     app.set_wallet_address_short(shorten(&address).into());
+    let entry = page.borrow().issued[kind].iter().find(|a| a["address"] == address.as_str()).cloned();
+    app.set_wallet_receive_label(entry.map(|a| receive_label(kind, &a)).unwrap_or_default().into());
     let qr = (!address.is_empty()).then(|| crate::qr::image(&address)).flatten();
     app.set_wallet_qr_shown(qr.is_some());
     if let Some(image) = qr {
         app.set_wallet_qr(image);
     }
+}
+
+const KIND_NAMES: [&str; 2] = ["Private", "Short"];
+
+/// "Private address 2, the newest" or "Short address 0, still receiving".
+fn receive_label(kind: usize, entry: &Value) -> String {
+    let index = entry["index"].as_u64().unwrap_or_default();
+    let which = if entry["current"] == true { "the newest" } else { "an earlier one, still receiving" };
+    format!("{} address {index}, {which}", KIND_NAMES[kind.min(1)])
+}
+
+/// "No payments yet", "1 payment, 3 NPT" or "4 payments, 12.5 NPT".
+fn received_text(entry: &Value) -> String {
+    match entry["payments"].as_u64().unwrap_or_default() {
+        0 => "No payments yet".to_string(),
+        1 => format!("1 payment, {} NPT", entry["received"].as_str().unwrap_or("0")),
+        n => format!("{n} payments, {} NPT", entry["received"].as_str().unwrap_or("0")),
+    }
+}
+
+fn address_row(entry: &Value) -> AddressRow {
+    let index = entry["index"].as_u64().unwrap_or_default();
+    let current = entry["current"] == true;
+    let address = entry["address"].as_str().unwrap_or_default();
+    AddressRow {
+        title: format!("Address {index}{}", if current { " · newest" } else { "" }).into(),
+        detail: format!("{} · {}", received_text(entry), shorten(address)).into(),
+        current,
+    }
+}
+
+/// The list view for the chosen kind.
+fn show_address_rows(app: &AppWindow, page: &Shared) {
+    let kind = (app.get_wallet_receive_kind() as usize).min(1);
+    let rows: Vec<AddressRow> = page.borrow().issued[kind].iter().map(address_row).collect();
+    app.set_wallet_address_rows(ModelRc::new(VecModel::from(rows)));
 }
 
 async fn send(weak: Weak<AppWindow>, page: Shared) {
@@ -597,12 +667,27 @@ fn demo_state(app: &AppWindow, state: &str) {
                 let generation = format!("nolgam1{}", "q".repeat(3000));
                 let short = format!("nolgaz1{}", "qpzry9x8gf2tvdw0s3jn54khce6mua7l".repeat(4));
                 app.set_wallet_address_short(shorten(if state == "wallet-receive" { &short } else { &generation }).into());
+                let kind = if state == "wallet-receive" { 1 } else { 0 };
+                app.set_wallet_receive_label(receive_label(kind, &json!({ "index": 2, "current": true })).into());
                 let qr = (state == "wallet-receive").then(|| crate::qr::image(&short)).flatten();
                 app.set_wallet_qr_shown(qr.is_some());
                 if let Some(image) = qr {
                     app.set_wallet_qr(image);
                 }
             });
+        }
+        "wallet-addresses" => {
+            app.set_wallet_state("addresses".into());
+            let rows: Vec<AddressRow> = [
+                json!({ "index": 3, "current": true, "payments": 0, "address": format!("nolgam1{}", "x".repeat(3000)) }),
+                json!({ "index": 2, "payments": 1, "received": "25", "address": format!("nolgam1{}", "y".repeat(3000)) }),
+                json!({ "index": 1, "payments": 4, "received": "120.5", "address": format!("nolgam1{}", "z".repeat(3000)) }),
+                json!({ "index": 0, "payments": 0, "address": format!("nolgam1{}", "q".repeat(3000)) }),
+            ]
+            .iter()
+            .map(address_row)
+            .collect();
+            app.set_wallet_address_rows(ModelRc::new(VecModel::from(rows)));
         }
         "wallet-history" => {
             app.set_wallet_state("history".into());
@@ -696,6 +781,17 @@ mod tests {
     fn block_times_format_as_utc_natively() {
         assert_eq!(crate::runtime::format_time(1_794_825_766_000), "2026-11-16 10:42 UTC");
         assert_eq!(crate::runtime::format_time(951_782_400_000), "2000-02-29 00:00 UTC");
+    }
+
+    #[test]
+    fn address_rows_read_well() {
+        let row = address_row(&json!({ "index": 2, "current": true, "payments": 1, "received": "3", "address": "nolgaz1abc" }));
+        assert_eq!((row.title.as_str(), row.detail.as_str(), row.current), ("Address 2 · newest", "1 payment, 3 NPT · nolgaz1abc", true));
+        let row = address_row(&json!({ "index": 0, "payments": 0, "address": "nolgaz1abc" }));
+        assert_eq!(row.detail.as_str(), "No payments yet · nolgaz1abc");
+        assert_eq!(received_text(&json!({ "payments": 4, "received": "12.5" })), "4 payments, 12.5 NPT");
+        assert_eq!(receive_label(0, &json!({ "index": 0 })), "Private address 0, an earlier one, still receiving");
+        assert_eq!(receive_label(1, &json!({ "index": 2, "current": true })), "Short address 2, the newest");
     }
 
     #[test]

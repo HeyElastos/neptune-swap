@@ -67,6 +67,20 @@ pub struct IssuedAddress {
     pub address: String,
 }
 
+/// An address handed out, and what it has received.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct AddressUse {
+    pub kind: AddressKind,
+    pub index: u64,
+    pub address: String,
+    /// Payments (coins) received on it.
+    pub payments: usize,
+    /// Their total, NPT.
+    pub received: String,
+    /// The one handed out now.
+    pub current: bool,
+}
+
 /// A payment submitted to the node and not yet seen in a block.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingSend {
@@ -102,6 +116,29 @@ impl LightWallet {
     pub fn current_address(&self, kind: AddressKind) -> Result<IssuedAddress> {
         let index = self.state.issued[kind.issued_slot()];
         Ok(IssuedAddress { index, address: self.address(kind, index)? })
+    }
+
+    /// Every address of `kind` handed out so far, newest first, with what each
+    /// has received. Index 0 is always there (a new wallet's first address).
+    pub fn issued_addresses(&self, kind: AddressKind) -> Result<Vec<AddressUse>> {
+        let current = self.state.issued[kind.issued_slot()];
+        let key_type = kind.key_type() as u8;
+        (0..=current)
+            .rev()
+            .map(|index| {
+                let coins: Vec<_> =
+                    self.state.coins.iter().filter(|c| c.key_type == key_type && c.key_index == index).collect();
+                let received: NativeCurrencyAmount = coins.iter().map(|c| c.utxo.get_native_currency_amount()).sum();
+                Ok(AddressUse {
+                    kind,
+                    index,
+                    address: self.address(kind, index)?,
+                    payments: coins.len(),
+                    received: npt(received),
+                    current: index == current,
+                })
+            })
+            .collect()
     }
 
     /// Hands out the next unused address of `kind`; the scan window moves with it.

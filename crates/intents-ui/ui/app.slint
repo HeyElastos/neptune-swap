@@ -247,6 +247,37 @@ export struct ActivityRow {
     pending: bool,
 }
 
+// An address handed out: which one, and what it received. A row opens it.
+export struct AddressRow {
+    title: string,
+    detail: string,
+    current: bool,
+}
+
+component AddressItem inherits Rectangle {
+    in property <AddressRow> entry;
+    callback open();
+    height: 52px;
+    HorizontalLayout {
+        spacing: Sp.m;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            min-width: 0px;
+            Text {
+                text: root.entry.title;
+                color: Skin.ink;
+                font-size: Ty.body;
+                font-weight: root.entry.current ? Ty.strong : 400;
+                overflow: elide;
+            }
+            Text { text: root.entry.detail; color: Skin.muted; font-size: Ty.caption; overflow: elide; }
+        }
+        Text { text: "›"; color: Skin.muted; font-size: Ty.title; vertical-alignment: center; }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.open(); } }
+}
+
 component ActivityItem inherits Rectangle {
     in property <ActivityRow> entry;
     height: 52px;
@@ -319,6 +350,12 @@ component WalletCard inherits VerticalLayout {
     in-out property <int> receive-kind;
     in property <image> qr;
     in property <bool> qr-shown;
+    // Which address the receive view shows ("Private address 2, the newest").
+    in property <string> receive-label;
+    // Every address of the chosen kind handed out, newest first.
+    in property <[AddressRow]> address-rows;
+    callback show-addresses();
+    callback open-address(int);
     callback paste-address();
     callback start-receive();
     callback close-view();
@@ -468,6 +505,24 @@ component WalletCard inherits VerticalLayout {
             Image { width: 200px; height: 200px; source: root.qr; image-rendering: pixelated; }
         }
     }
+    if root.state == "receive": HorizontalLayout {
+        spacing: Sp.s;
+        Text {
+            text: root.receive-label;
+            color: Skin.muted;
+            font-size: Ty.caption;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Text {
+            text: "All addresses";
+            color: Skin.accent-text;
+            font-size: Ty.small;
+            vertical-alignment: center;
+            TouchArea { mouse-cursor: pointer; clicked => { root.show-addresses(); } }
+        }
+    }
     if root.state == "receive": Rectangle {
         border-radius: Rad.ctrl;
         background: Skin.on-glass;
@@ -491,6 +546,26 @@ component WalletCard inherits VerticalLayout {
         Button { text: "Done"; clicked => { root.close-view(); } }
     }
     if root.state == "receive" && root.copy-note != "": Text { text: root.copy-note; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+
+    // Every address handed out.
+    if root.state == "addresses": Text { text: "Your addresses"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
+    if root.state == "addresses": HorizontalLayout {
+        alignment: start;
+        Segmented { options: ["Private", "Short"]; selected <=> root.receive-kind; }
+    }
+    if root.state == "addresses": Text {
+        text: "Every address this wallet has handed out. All of them keep receiving; open one to copy it or show its QR code.";
+        color: Skin.muted;
+        font-size: Ty.small;
+        wrap: word-wrap;
+    }
+    if root.state == "addresses": VerticalLayout {
+        for entry[i] in root.address-rows: AddressItem { entry: entry; open => { root.open-address(i); } }
+    }
+    if root.state == "addresses": HorizontalLayout {
+        alignment: end;
+        Button { text: "Back"; primary: false; clicked => { root.start-receive(); } }
+    }
 
     // All activity.
     if root.state == "history": Text { text: "Activity"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
@@ -664,6 +739,10 @@ export component AppWindow inherits Window {
     in-out property <int> wallet-receive-kind;
     in property <image> wallet-qr;
     in property <bool> wallet-qr-shown;
+    in property <string> wallet-receive-label;
+    in property <[AddressRow]> wallet-address-rows;
+    callback wallet-show-addresses();
+    callback wallet-open-address(int);
     callback wallet-paste-address();
     callback wallet-start-receive();
     callback wallet-close-view();
@@ -903,6 +982,10 @@ export component AppWindow inherits Window {
                             receive-kind <=> root.wallet-receive-kind;
                             qr: root.wallet-qr;
                             qr-shown: root.wallet-qr-shown;
+                            receive-label: root.wallet-receive-label;
+                            address-rows: root.wallet-address-rows;
+                            show-addresses => { root.wallet-show-addresses(); }
+                            open-address(i) => { root.wallet-open-address(i); }
                             paste-address => { root.wallet-paste-address(); }
                             start-receive => { root.wallet-start-receive(); }
                             close-view => { root.wallet-close-view(); }
