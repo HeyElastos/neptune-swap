@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+mod prices;
 mod wallet;
 
 use std::net::SocketAddr;
@@ -122,6 +123,9 @@ enum Request {
         swap_id: String,
         fee: String,
     },
+    /// Reference prices in USD (display only), when the configuration allows
+    /// asking public sources.
+    Prices {},
     Shutdown {},
 }
 
@@ -135,6 +139,11 @@ struct Config {
     /// before an own node runs here.
     #[serde(default)]
     allow_remote_nodes: bool,
+    /// Ask public price sources (CoinGecko, Kraken) for USD reference prices.
+    /// They see this computer's address and when it asks; the Runtime asks
+    /// the user before the capsule may call `prices`.
+    #[serde(default)]
+    price_sources: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,11 +188,13 @@ impl Node for HttpNode {
 pub struct Provider {
     networks: Vec<Network>,
     wallets: Wallets,
+    price_sources: bool,
+    prices: prices::Prices,
 }
 
 impl Default for Provider {
     fn default() -> Self {
-        Self { networks: Vec::new(), wallets: Wallets::new(None) }
+        Self { networks: Vec::new(), wallets: Wallets::new(None), price_sources: false, prices: Default::default() }
     }
 }
 
@@ -194,6 +205,8 @@ impl Provider {
         let mut provider = Self {
             networks: Vec::new(),
             wallets: Wallets::new(std::env::var_os("NEPTUNE_PROVIDER_DATA").map(PathBuf::from)),
+            price_sources: false,
+            prices: Default::default(),
         };
         if let Ok(raw) = std::env::var("NEPTUNE_PROVIDER_CONFIG") {
             let configured = serde_json::from_str(&raw).map_err(|e| e.to_string()).and_then(|c| provider.configure(c));
@@ -272,6 +285,13 @@ impl Provider {
             Request::HtlcRefund { network, swap_id, fee } => self.wallet(&network, |w, n| {
                 w.wallets.htlc_refund(&n.id, n.chain, &swap_id, &fee, now_ms(), &HttpNode(n.rpc.clone()))
             }),
+            Request::Prices {} if !self.price_sources => {
+                error("prices_disabled", "this Home does not ask public price sources")
+            }
+            Request::Prices {} => match self.prices.get(prices::fetch_json) {
+                Ok(value) => ok(Some(value)),
+                Err(message) => error("prices_unavailable", &message),
+            },
             Request::Shutdown {} => ok(None),
         }
     }
@@ -293,6 +313,7 @@ impl Provider {
             networks.push(Network { id: network.id, chain, rpc });
         }
         self.networks = networks;
+        self.price_sources = config.price_sources;
         Ok(())
     }
 
