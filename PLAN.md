@@ -277,6 +277,23 @@ a coin received before the wallet kept the set still asks the node once.
   runs through Wallet. The form connects on Base (the dev Home's local chain). BTC: Wallet cannot
   send Bitcoin yet.
 
+## Standing offers and solver mode (2026-11-16)
+
+- **Offer** (`intents-protocol::offer`): a solver's pair, rate as two exact amounts, min/max,
+  expiry (≤ 1 h), `withdrawn`. Signed with the solver's long-lived `did:key`, not sealed, on
+  `neptune-swap/offers/main` (other networks: `/test`). It binds nothing: a taker still sends a
+  sealed Intent to that solver and the HTLC rules protect both. `price_of` rounds up for the
+  solver, `amount_for` down; 256-bit `mul_div` (NPT units exceed 128-bit products).
+- **Solver identity**: Ed25519 seed from the wallet seed (`LightWallet::solver_key_seed`, own
+  domain), so a restore keeps the same DID. Provider ops `solver_identity`, `offer_sign`; the key
+  never leaves the provider.
+- **App**: the swap page lists open offers for its pair (verified before read, expired and
+  withdrawn dropped, ≤ 5 per solver, ≤ 200 in all, best rate first); tapping one fills the form
+  at that rate. The Offer page publishes (copies live 20 min, republished every 10 min while the
+  page is open) and withdraws.
+- Not built: answering takers' sealed requests from the app (a solver still runs `crates/solver`),
+  the live carrier test between the gateway's node and the managed runtime's node.
+
 ## Risks: DDoS, spam, cheating, and what elastOS gives (2026-11-16)
 
 | Risk | Defence | elastOS part |
