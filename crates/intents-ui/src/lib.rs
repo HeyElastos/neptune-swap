@@ -1,4 +1,4 @@
-//! Neptune Intents, the capsule's UI: Slint for the screen, Rust for everything behind it. The
+//! Neptune Swap, the capsule's UI: Slint for the screen, Rust for everything behind it. The
 //! form builds a protocol intent with `intents-protocol` itself, so the page and the solvers read
 //! the same rules.
 
@@ -71,7 +71,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
             runtime::announce(&token);
             spawn(load_networks(app.as_weak(), Some(token), networks));
         }
-        None => set_node(&app, "idle", "Not in Home", "Open Neptune Intents from Home to reach the Neptune node."),
+        None => set_node(&app, "idle", "Not in Home", "Open Neptune Swap from Home to reach the Neptune node."),
     }
     // Development: NEPTUNE_INTENTS_SIZE=360x760 lays the window out at that size (a phone).
     #[cfg(not(target_arch = "wasm32"))]

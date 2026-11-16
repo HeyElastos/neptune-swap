@@ -1,6 +1,7 @@
-# Neptune capsule: private intents on elastOS
+# Neptune Swap: private swaps on elastOS
 
-A private RFQ/swap app in the spirit of NEAR Intents, built as an elastOS capsule, with
+**Neptune Swap** (renamed from Neptune Intents, user 2026-11-16; the app id is still
+`neptune-intents`, see Known limits). A private RFQ/swap app in the spirit of NEAR Intents, built as an elastOS capsule, with
 Neptune Cash as the settlement layer. This repo is its own project, separate from
 Hyper and hey-engine (decided 2026-10-29).
 

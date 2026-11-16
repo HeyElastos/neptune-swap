@@ -207,7 +207,7 @@ fn network(app: &AppWindow) -> Option<String> {
 /// A provider call for the selected network, or the reason there is none.
 async fn call(weak: &Weak<AppWindow>, page: &Shared, op: &str, mut body: Value) -> Result<Value, String> {
     let app = weak.upgrade().ok_or("closed")?;
-    let token = page.borrow().token.clone().ok_or("Open Neptune Intents from Home to use the wallet.")?;
+    let token = page.borrow().token.clone().ok_or("Open Neptune Swap from Home to use the wallet.")?;
     let network = network(&app).ok_or("No Neptune network is set up on this Home yet.")?;
     drop(app);
     body["network"] = json!(network);

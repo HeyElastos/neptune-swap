@@ -3,7 +3,7 @@ name = "intents-ui"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Neptune Intents: the capsule's UI in Slint and Rust (wasm32 for the capsule, native for development)"
+description = "Neptune Swap: the capsule's UI in Slint and Rust (wasm32 for the capsule, native for development)"
 
 # One binary: native it opens a window; for wasm32, wasm-bindgen turns it into the capsule page.
 [[bin]]

@@ -15,7 +15,7 @@
     {
       "id": "neptune.intents",
       "version": "0.1.0",
-      "description": "Compose private swap intents and check the Neptune node",
+      "description": "Neptune Swap: compose private swaps and use the Neptune wallet",
       "methods": [
         {
           "id": "networks.view",

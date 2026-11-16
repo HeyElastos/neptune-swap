@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs the Neptune Intents capsule into the isolated development Home
+# Installs the Neptune Swap capsule into the isolated development Home
 # (default ~/elastos-neptune-dev, see PLAN.md). Never touches the real Home:
 # its components.json is pinned by the signed release.
 #   scripts/install-dev-home.sh            copy capsules/neptune-intents and list it
@@ -22,7 +22,7 @@ path = sys.argv[1]
 manifest = json.load(open(path))
 manifest["external"]["neptune-intents"] = {
     "install_path": "capsules/neptune-intents",
-    "description": "Neptune Intents (development)",
+    "description": "Neptune Swap (development)",
     "platforms": {"*": {"install_path": "capsules/neptune-intents"}},
 }
 json.dump(manifest, open(path, "w"), indent=2)

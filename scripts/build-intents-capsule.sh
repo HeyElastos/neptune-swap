@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the Neptune Intents capsule's page: the Slint UI (crates/intents-ui) for wasm32, then
+# Builds the Neptune Swap capsule's page: the Slint UI (crates/intents-ui) for wasm32, then
 # wasm-bindgen into capsules/neptune-intents/browser/pkg/ beside the hand-written index.html.
 #   scripts/build-intents-capsule.sh          release build
 #   scripts/build-intents-capsule.sh --opt    also wasm-opt -Oz (cargo install wasm-opt)

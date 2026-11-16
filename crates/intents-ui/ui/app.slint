@@ -1,4 +1,4 @@
-// Neptune Intents. Hyper's tiers: the node is glanced at (a chip and its panel), the swap is
+// Neptune Swap. Hyper's tiers: the node is glanced at (a chip and its panel), the swap is
 // the main area, the review is a sheet. Everything floats as frosted glass over the wallpaper.
 
 import { Skin, Look, Sp, Rad, Ty, Ctl, Motion } from "tokens.slint";
@@ -606,7 +606,7 @@ component Popover inherits Glass {
 }
 
 export component AppWindow inherits Window {
-    title: "Neptune Intents";
+    title: "Neptune Swap";
     preferred-width: 520px;
     preferred-height: 760px;
     min-width: 320px;
@@ -759,7 +759,7 @@ export component AppWindow inherits Window {
                 padding-right: Sp.l;
                 spacing: Sp.m;
                 Text {
-                    text: "Neptune Intents";
+                    text: "Neptune Swap";
                     color: Skin.ink;
                     font-size: Ty.title;
                     font-weight: Ty.strong;
@@ -989,7 +989,7 @@ export component AppWindow inherits Window {
                                 wrap: word-wrap;
                             }
                             Button {
-                                text: "Review intent";
+                                text: "Review swap";
                                 clicked => { root.review(); }
                             }
                         }
@@ -1058,7 +1058,7 @@ export component AppWindow inherits Window {
                 padding: Sp.xl;
                 spacing: Sp.m;
                 Text {
-                    text: "Review intent";
+                    text: "Review swap";
                     color: Skin.ink;
                     font-size: Ty.display;
                     font-weight: Ty.strong;
