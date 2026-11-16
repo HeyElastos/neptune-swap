@@ -136,6 +136,8 @@ pub fn parse_network(name: &str) -> Result<Network> {
     Ok(match name {
         "main" | "mainnet" => Network::Main,
         "testnet" => Network::Testnet(0),
+        // Mock proofs and proof of work: local development only.
+        "regtest" => Network::RegTest,
         other => bail!("unknown network {other}"),
     })
 }
@@ -181,6 +183,12 @@ impl LightWallet {
     fn reindex(&mut self) {
         self.by_index_set =
             self.state.coins.iter().enumerate().map(|(i, c)| (c.index_set_hash, i)).collect();
+    }
+
+    /// The sync point that `block` is: start syncing after it.
+    pub fn sync_point_of(block: &RpcWalletBlock) -> SyncPoint {
+        let kernel: BlockKernel = block.kernel.clone().into();
+        SyncPoint { height: kernel.header.height.into(), hash: block.hash() }
     }
 
     pub fn state(&self) -> &WalletState {

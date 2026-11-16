@@ -8,14 +8,22 @@
 
 #![forbid(unsafe_code)]
 
+mod wallet;
+
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use light_core::neptune_primitives::network::Network as Chain;
+use wallet::{Node, Wallets};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 const RUNTIME_INVOCATION_FIELD: &str = "_runtime_invocation";
 const NODE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Block downloads are larger (up to 100 blocks per call).
+const BLOCKS_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Every variant has braces: serde enforces `deny_unknown_fields` on struct
 // variants of an internally tagged enum, but not on unit variants.
@@ -28,6 +36,27 @@ enum Request {
     },
     Networks {},
     Status {
+        network: String,
+    },
+    WalletStatus {
+        network: String,
+    },
+    WalletCreate {
+        network: String,
+    },
+    WalletImport {
+        network: String,
+        phrase: String,
+        #[serde(default)]
+        from_height: u64,
+    },
+    WalletReceive {
+        network: String,
+    },
+    WalletSync {
+        network: String,
+    },
+    WalletBalance {
         network: String,
     },
     Shutdown {},
@@ -50,19 +79,46 @@ struct NetworkConfig {
 
 struct Network {
     id: String,
+    chain: Chain,
     rpc: SocketAddr,
 }
 
-#[derive(Default)]
+/// The node of one network, over loopback JSON-RPC.
+struct HttpNode(SocketAddr);
+
+impl Node for HttpNode {
+    fn call(&self, body: String) -> anyhow::Result<String> {
+        let reply = ureq::post(&format!("http://{}/", self.0))
+            .timeout(BLOCKS_TIMEOUT)
+            .set("content-type", "application/json")
+            .send_string(&body)
+            .map_err(|e| {
+                eprintln!("neptune-provider: node request failed: {e}");
+                anyhow::anyhow!("The local Neptune node did not answer.")
+            })?;
+        Ok(reply.into_string()?)
+    }
+}
+
 pub struct Provider {
     networks: Vec<Network>,
+    wallets: Wallets,
+}
+
+impl Default for Provider {
+    fn default() -> Self {
+        Self { networks: Vec::new(), wallets: Wallets::new(None) }
+    }
 }
 
 impl Provider {
     /// Takes optional startup config from `NEPTUNE_PROVIDER_CONFIG` (JSON) for
     /// running outside the Runtime. The Runtime sends the same shape in `init`.
     pub fn from_env() -> Self {
-        let mut provider = Self::default();
+        let mut provider = Self {
+            networks: Vec::new(),
+            wallets: Wallets::new(std::env::var_os("NEPTUNE_PROVIDER_DATA").map(PathBuf::from)),
+        };
         if let Ok(raw) = std::env::var("NEPTUNE_PROVIDER_CONFIG") {
             let configured = serde_json::from_str(&raw).map_err(|e| e.to_string()).and_then(|c| provider.configure(c));
             if let Err(e) = configured {
@@ -100,6 +156,20 @@ impl Provider {
                 ok(Some(json!({ "networks": ids })))
             }
             Request::Status { network } => self.status(&network),
+            Request::WalletStatus { network } => self.wallet(&network, |w, n| w.wallets.status(&n.id, n.chain)),
+            Request::WalletCreate { network } => {
+                self.wallet(&network, |w, n| w.wallets.create(&n.id, n.chain, &HttpNode(n.rpc)))
+            }
+            Request::WalletImport { network, phrase, from_height } => self.wallet(&network, |w, n| {
+                w.wallets.import(&n.id, n.chain, &phrase, from_height, &HttpNode(n.rpc))
+            }),
+            Request::WalletReceive { network } => self.wallet(&network, |w, n| w.wallets.receive(&n.id, n.chain)),
+            Request::WalletSync { network } => {
+                self.wallet(&network, |w, n| w.wallets.sync(&n.id, n.chain, &HttpNode(n.rpc)))
+            }
+            Request::WalletBalance { network } => {
+                self.wallet(&network, |w, n| w.wallets.balance(&n.id, n.chain, now_ms()))
+            }
             Request::Shutdown {} => ok(None),
         }
     }
@@ -114,10 +184,23 @@ impl Provider {
                 return Err(format!("network id {:?} must be neptune-<a-z0-9->", network.id));
             }
             let rpc = loopback_rpc(&network.rpc)?;
-            networks.push(Network { id: network.id, rpc });
+            let chain = chain_of(&network.id)?;
+            networks.push(Network { id: network.id, chain, rpc });
         }
         self.networks = networks;
         Ok(())
+    }
+
+    /// Runs a wallet operation on a configured network; errors become a
+    /// `wallet_error` reply with the operation's message.
+    fn wallet(&self, network: &str, op: impl FnOnce(&Self, &Network) -> anyhow::Result<Value>) -> Value {
+        let Some(found) = self.networks.iter().find(|n| n.id == network) else {
+            return error("unknown_network", &format!("{network} is not configured"));
+        };
+        match op(self, found) {
+            Ok(data) => ok(Some(data)),
+            Err(e) => error("wallet_error", &format!("{e:#}")),
+        }
     }
 
     fn status(&self, network: &str) -> Value {
@@ -129,6 +212,17 @@ impl Provider {
             Err((code, message)) => error(code, &message),
         }
     }
+}
+
+/// The chain a network id names: `neptune-main`, `neptune-testnet` or
+/// `neptune-regtest` (mock proofs, local development).
+fn chain_of(id: &str) -> Result<Chain, String> {
+    let name = id.strip_prefix("neptune-").unwrap_or(id);
+    light_core::parse_network(name).map_err(|_| format!("network id {id:?} names no Neptune network (main, testnet, regtest)"))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Accepts only `http://<loopback IP literal>:<port>`. Host names are refused,

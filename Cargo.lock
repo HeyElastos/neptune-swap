@@ -3859,6 +3859,9 @@ dependencies = [
 name = "neptune-provider"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "flate2",
+ "light-core",
  "serde",
  "serde_json",
  "ureq",
