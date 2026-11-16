@@ -112,3 +112,14 @@ fn the_runtime_invocation_envelope_is_accepted_and_shutdown_stops() {
     let (line, shutdown) = provider.handle_line(r#"{"op":"shutdown"}"#);
     assert_eq!((line.as_str(), shutdown), (r#"{"status":"ok"}"#, true));
 }
+
+#[test]
+fn the_runtime_bridge_init_keeps_the_startup_networks() {
+    let mut provider = configured("http://127.0.0.1:9799");
+    let generic = json!({ "op": "init", "config": {
+        "base_path": "", "allowed_paths": [], "read_only": false, "encryption_key": ""
+    } });
+    assert_eq!(call(&mut provider, generic)["status"], "ok");
+    let networks = call(&mut provider, json!({ "op": "networks" }));
+    assert_eq!(networks["data"]["networks"][0]["id"], "neptune-testnet");
+}

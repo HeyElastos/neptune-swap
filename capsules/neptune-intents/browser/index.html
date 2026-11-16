@@ -13,15 +13,7 @@
 </head>
 <body>
 <canvas id="canvas" tabindex="0"></canvas>
-<script type="module">
-  // The whole app is Rust and Slint (crates/intents-ui); this only starts the wasm.
-  import init from './pkg/intents-ui.js';
-  try {
-    await init({ module_or_path: './pkg/intents-ui_bg.wasm' });
-  } catch (e) {
-    // Slint's event loop never returns: it leaves by a JS exception, by design.
-    if (!String(e).includes('Using exceptions for control flow')) throw e;
-  }
-</script>
+<!-- elastOS 2.x app pages allow scripts from the capsule only (CSP script-src 'self'), not inline. -->
+<script type="module" src="./boot.js"></script>
 </body>
 </html>

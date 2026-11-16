@@ -87,7 +87,10 @@ impl Provider {
 
     fn handle(&mut self, request: Request) -> Value {
         match request {
-            Request::Init { config } if config.is_null() => ok(None),
+            // The Runtime's own bridge sends its generic ProviderConfig (base_path,
+            // allowed_paths, ...): no Neptune networks in it, so the startup
+            // configuration from NEPTUNE_PROVIDER_CONFIG stays.
+            Request::Init { config } if config.get("networks").is_none() => ok(None),
             Request::Init { config } => match self.configure(config) {
                 Ok(()) => ok(None),
                 Err(message) => error("invalid_config", &message),
