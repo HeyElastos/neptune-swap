@@ -1754,6 +1754,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "evm-htlc"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+ "sha3 0.10.9",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
