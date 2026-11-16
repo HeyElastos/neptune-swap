@@ -17,7 +17,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# neptune-core v0.19.3 (259881b), vendored by scripts/vendor-neptune.sh with
+# neptune-core v0.20.1 (404f7379), vendored by scripts/vendor-neptune.sh with
 # patches/neptune-core-wasm32.patch applied.
 [workspace.dependencies]
 neptune-consensus = { path = "vendor/neptune-core/neptune-consensus" }

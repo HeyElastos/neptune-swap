@@ -1,5 +1,5 @@
 diff --git a/neptune-consensus/Cargo.toml b/neptune-consensus/Cargo.toml
-index fcf79dd..ca9e93d 100644
+index c7ad627..d9337ad 100644
 --- a/neptune-consensus/Cargo.toml
 +++ b/neptune-consensus/Cargo.toml
 @@ -67,6 +67,15 @@ serde_json = "1.0"
@@ -8,9 +8,9 @@ index fcf79dd..ca9e93d 100644
  thiserror = "1.0.65"
 +tracing = "0.1"
 +
-+neptune-job-queue = { version = "0.19.3", path = "../neptune-job-queue" }
-+neptune-mutator-set = { version = "0.19.3", path = "../neptune-mutator-set" }
-+neptune-primitives = { version = "0.19.3", path = "../neptune-primitives" }
++neptune-job-queue = { version = "0.20.1", path = "../neptune-job-queue" }
++neptune-mutator-set = { version = "0.20.1", path = "../neptune-mutator-set" }
++neptune-primitives = { version = "0.20.1", path = "../neptune-primitives" }
 +
 +# wasm32 (light wallet patch): tokio supports only sync, macros, io-util, rt
 +# and time there, so process and rt-multi-thread are native-only.
@@ -24,14 +24,14 @@ index fcf79dd..ca9e93d 100644
  ] }
 -tracing = "0.1"
  
--neptune-job-queue = { version = "0.19.3", path = "../neptune-job-queue" }
--neptune-mutator-set = { version = "0.19.3", path = "../neptune-mutator-set" }
--neptune-primitives = { version = "0.19.3", path = "../neptune-primitives" }
+-neptune-job-queue = { version = "0.20.1", path = "../neptune-job-queue" }
+-neptune-mutator-set = { version = "0.20.1", path = "../neptune-mutator-set" }
+-neptune-primitives = { version = "0.20.1", path = "../neptune-primitives" }
 +[target.'cfg(target_arch = "wasm32")'.dependencies]
 +tokio = { version = "1.47", features = ["io-util", "macros", "rt", "sync", "time"] }
  
  [dev-dependencies]
- # Unit tests in this crate need the optional arbitrary/proptest impls and the
+ futures = "0.3"
 diff --git a/neptune-consensus/src/proof_abstractions/tasm/prover_job.rs b/neptune-consensus/src/proof_abstractions/tasm/prover_job.rs
 index 6051df9..0ebff21 100644
 --- a/neptune-consensus/src/proof_abstractions/tasm/prover_job.rs
@@ -93,7 +93,7 @@ index e33f6df..119bd85 100644
              .thread_name("triton-vm-job-queue")
              .build()
 diff --git a/neptune-primitives/Cargo.toml b/neptune-primitives/Cargo.toml
-index d22e8fa..e488e2a 100644
+index 64455d4..51ec909 100644
 --- a/neptune-primitives/Cargo.toml
 +++ b/neptune-primitives/Cargo.toml
 @@ -35,7 +35,6 @@ serde = { version = "1.0", features = ["derive"] }
@@ -105,7 +105,7 @@ index d22e8fa..e488e2a 100644
  # optional: required for unit tests and the arbitrary-impls feature.
  # duplicated (non-optional) in [dev-dependencies] for this crate's own tests.
 @@ -43,6 +42,10 @@ arbitrary = { version = "1.4.1", features = ["derive"], optional = true }
- proptest = { version = "1.7", optional = true }
+ proptest = { version = ">=1.7, <1.12.0", optional = true }
  proptest-arbitrary-interop = { version = "0.1", optional = true }
  
 +# wasm32 (light wallet patch): tokio has no fs there; DataDirectory is native-only.

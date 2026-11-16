@@ -74,7 +74,7 @@ short; later, bonds.
 script, the EVM precompile and Solana all have SHA-256, so one hashlock works against
 all of them.
 
-## Current state (2026-10-30, uncommitted)
+## Current state (2026-11-16)
 
 First slice, built and tested:
 
@@ -82,7 +82,7 @@ First slice, built and tested:
   (Ed25519 `did:key`, domain-separated, canonical sorted-key JSON). Decoding checks
   size, kind, signature over the body as received, then the body's rules (NPT on
   one side, canonical positive amounts, expiry, user HTLC timeout at least
-  `MIN_TIMEOUT_GAP_SECS` after the solver's, SHA-256 hash lock). 15 tests.
+  `MIN_TIMEOUT_GAP_SECS` after the solver's, SHA-256 hash lock). 20 tests.
 - `crates/swap-guard`: swap step 4, the NPT receiver's check of the giver's lock before it
   locks its own asset: lock script = the agreed `Htlc`, exactly one NativeCurrency coin of the
   agreed amount (no TimeLock, nothing else), the notification opens the addition record, the
@@ -122,13 +122,19 @@ Spike from 2026-10-28:
 
 - `crates/light-core`: Neptune light wallet core. Scans blocks for a seed's coins
   (Generation, Symmetric, EC Hybrid keys, gap 25) and computes the balance. Does no
-  I/O. Trusts the node for block proofs, PoW and the canonical chain.
+  I/O. Trusts the node for block proofs, PoW and the canonical chain. 6 tests on fake
+  blocks pass (first run 2026-11-16), plus an ignored one that chains real
+  `wallet_getBlocks` replies (`NEPTUNE_BLOCKS=a.json,b.json`): passed on main net
+  62495–62509 (across epsilon's activation) and 62960–62975.
 - `crates/light-core/src/rpc.rs`: JSON-RPC bodies for a neptune-core node.
   **Breaks rule 1:** `DEFAULT_NODE = https://wallet.neptunefundamentals.org`. Move node
   access behind the `neptune` provider.
 - `crates/light-wasm`, `crates/light-cli`: empty stubs. `capsule/browser`: empty.
-- `vendor/neptune-core`: v0.19.3 (259881b2) via `scripts/vendor-neptune.sh`, plus
-  `patches/neptune-core-wasm32.patch`. Upstream is newer (hardfork delta,
+- `vendor/neptune-core`: v0.20.1 (404f7379) via `scripts/vendor-neptune.sh`, plus
+  `patches/neptune-core-wasm32.patch` (same 40 lines as on v0.19.3; only the Cargo.toml
+  context moved). triton-vm 9.0.1 / tasm-lib 9.0.0 / twenty-first 3.1.1 are unchanged, so
+  the HTLC's pinned VM still matches consensus; its real-STARK test passes (41.6 s,
+  release). Was v0.19.3 until 2026-11-16; upstream was newer (hardfork delta,
   transaction chaining): rebase before building anything on top.
 
 ## Order of work
@@ -156,6 +162,28 @@ Spike from 2026-10-28:
   with the user account's rights, Home can still get every app's permissions, and
   approvals are not yet shown on a runtime-only screen (S1/S2 of #173, planned 0.8.1).
   Until then a payment approval could be spoofed by Home: keep amounts small.
+
+## Softfork epsilon: succinct validation (main net from height 62,500)
+
+Active on main net (tip 62,978 on 2026-11-16; post-activation blocks carry 4 appendix
+claims instead of 1). Each block proof now also covers `PredecessorIsValid`, the SWBF update
+tree and `KnowsMutatorSet` (neptune-core `docs/src/consensus/succinctness.md`). What it gives
+this project, and what it does not:
+
+- **Validation without trusting the node.** Download one block and verify its proof: that
+  certifies the chain's validity, the mutator set and block MMR accumulators, and the
+  cumulative proof-of-work used to pick the canonical fork. The public node serves the tip
+  proof (`chain_tipProof`, ~2.4 MB hex JSON). Not built: light-core still trusts the node.
+  To check: whether the recursion reaches below 62,500 (pre-epsilon blocks lack the claim),
+  and how long triton-vm's verifier takes in wasm.
+- **Not succinct asset management.** A wallet still has to find its coins (scan blocks, or
+  the UTXO index, which reveals them) and keep membership proofs current (process each block
+  while online, ask an archival node, or download the blocks it missed). Neptune's docs call
+  this support "limited". A new wallet starting at the tip avoids history; a restore does not.
+- **Swaps.** swap-guard today takes the block kernel from the caller. With a verified tip,
+  it could check the lock's block against the tip's block MMR (an MMR membership proof of
+  that block's hash) and the lock's addition record against that block: the receiver would
+  then trust no node for the lock it checks. Not built.
 
 ## Open questions
 

@@ -5,7 +5,7 @@ edition.workspace = true
 publish.workspace = true
 description = "The Neptune half of an atomic swap: a hashed timelock lock script for Triton VM"
 
-# The versions upstream neptune-core uses (Cargo.lock at d8ce73c): the lock script must run on
+# The versions upstream neptune-core uses (Cargo.lock at v0.20.1, 404f7379): the lock script must run on
 # exactly the VM that consensus verifies with.
 [dependencies]
 tasm-lib = "=9.0.0"

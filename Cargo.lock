@@ -3765,7 +3765,7 @@ dependencies = [
 
 [[package]]
 name = "neptune-consensus"
-version = "0.19.3"
+version = "0.20.1"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -3800,7 +3800,7 @@ dependencies = [
 
 [[package]]
 name = "neptune-job-queue"
-version = "0.19.3"
+version = "0.20.1"
 dependencies = [
  "async-trait",
  "rand 0.10.3",
@@ -3812,7 +3812,7 @@ dependencies = [
 
 [[package]]
 name = "neptune-mutator-set"
-version = "0.19.3"
+version = "0.20.1"
 dependencies = [
  "arbitrary",
  "get-size2",
@@ -3829,7 +3829,7 @@ dependencies = [
 
 [[package]]
 name = "neptune-primitives"
-version = "0.19.3"
+version = "0.20.1"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -3860,7 +3860,7 @@ dependencies = [
 
 [[package]]
 name = "neptune-rpc-api"
-version = "0.19.3"
+version = "0.20.1"
 dependencies = [
  "async-trait",
  "hex",
@@ -3882,7 +3882,7 @@ dependencies = [
 
 [[package]]
 name = "neptune-rpc-macros"
-version = "0.19.3"
+version = "0.20.1"
 dependencies = [
  "convert_case 0.9.0",
  "quote",
@@ -3891,7 +3891,7 @@ dependencies = [
 
 [[package]]
 name = "neptune-wallet"
-version = "0.19.3"
+version = "0.20.1"
 dependencies = [
  "aead",
  "aes-gcm",

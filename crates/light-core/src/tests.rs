@@ -19,6 +19,7 @@ use neptune_wallet::composer_parameters::ComposerParameters;
 use neptune_wallet::fee_notification_policy::FeeNotificationPolicy;
 use neptune_wallet::utxo_notification::UtxoNotificationPayload;
 use rand::RngExt;
+use tasm_lib::twenty_first::util_types::mmr::mmr_trait::Mmr;
 
 use super::*;
 
@@ -179,3 +180,25 @@ fn rpc_bodies_match_the_node_format() {
 }
 
 use serde_json::Value;
+
+/// Real `wallet_getBlocks` replies, saved to files named in `NEPTUNE_BLOCKS`
+/// (comma-separated). Each run of blocks must chain: the wallet's hash of every
+/// block is the next block's `prev_block_digest`. Across main net height 62,500
+/// this covers softfork epsilon's larger block appendix.
+#[test]
+#[ignore = "needs saved node replies: NEPTUNE_BLOCKS=a.json,b.json"]
+fn real_blocks_chain_through_the_wallet() {
+    let files = std::env::var("NEPTUNE_BLOCKS").expect("NEPTUNE_BLOCKS");
+    for file in files.split(',') {
+        let reply = std::fs::read_to_string(file).unwrap();
+        let blocks = rpc::parse_blocks(&reply).unwrap();
+        let first: BlockKernel = blocks[0].kernel.clone().into();
+        let mut w = LightWallet::from_phrase(PHRASE, NETWORK).unwrap();
+        let start = u64::from(first.header.height) - 1;
+        w.set_sync_point(SyncPoint { height: start, hash: first.header.prev_block_digest });
+        let n = blocks.len() as u64;
+        let r = w.apply_blocks(blocks).unwrap();
+        assert_eq!(r.height, Some(start + n), "{file}");
+        eprintln!("{file}: blocks {}..={} chain; {} inputs, {} announcements", start + 1, start + n, r.inputs, r.announcements);
+    }
+}
