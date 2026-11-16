@@ -12,9 +12,8 @@ use anyhow::{ensure, Context, Result};
 use ed25519_dalek::SigningKey;
 use evm_htlc::{decode_lock, hex, lock_id, parse_address, parse_hex, parse_word, Address, Word};
 use evm_signer::{Node, Wallet};
-use intents_protocol::{decode, may_reveal, other_refund_at, Accept, Amount, Asset, Chain, Decoded, Intent, Net, Quote, Signed};
+use intents_protocol::{decode, may_reveal, other_refund_at, Accept, Amount, Asset, Chain, Decoded, EvmLocked, Intent, Net, NptLocked, Quote, Signed};
 use light_core::swap::HtlcNote;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::neptune::{npt_text, Provider};
@@ -25,22 +24,6 @@ const PROTOCOL_VERSION: u16 = intents_protocol::PROTOCOL_VERSION;
 pub const NPT_FEE: &str = "0.05";
 /// Smallest NPT unit per coin.
 const NAU_PER_NPT: u128 = 4 * 10u128.pow(30);
-
-/// After the user's NPT lock: the note for the solver (off-chain, to it only).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NptLocked {
-    pub accept: String,
-    pub note: HtlcNote,
-    /// The user's node tip before the lock: the solver searches from here.
-    pub from_height: u64,
-}
-
-/// After the solver's ETH lock: where it is.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EthLocked {
-    pub contract: String,
-    pub id: String,
-}
 
 pub struct EvmChain {
     pub node: Node,
@@ -70,6 +53,7 @@ pub struct User {
     pub eth: Wallet,
     intent: Option<Decoded<Intent>>,
     quote: Option<Decoded<Quote>>,
+    accept: Option<Decoded<Accept>>,
     swap_id: Option<String>,
     hash_lock: Option<[u8; 32]>,
     neptune_refund_ms: u64,
@@ -78,7 +62,7 @@ pub struct User {
 impl User {
     /// A fresh one-time DID per intent, so solvers cannot link a user's trades.
     pub fn new(neptune: Provider, eth: Wallet) -> Self {
-        Self { did: SigningKey::from_bytes(&rand::random()), neptune, eth, intent: None, quote: None, swap_id: None, hash_lock: None, neptune_refund_ms: 0 }
+        Self { did: SigningKey::from_bytes(&rand::random()), neptune, eth, intent: None, quote: None, accept: None, swap_id: None, hash_lock: None, neptune_refund_ms: 0 }
     }
 
     /// Give `npt_units` NPT for at least `min_wei` ETH.
@@ -116,14 +100,16 @@ impl User {
         let bytes = Signed::sign(&accept, &self.did, NET)?.encode()?;
         let decoded: Decoded<Accept> = decode(&bytes, now_secs(), NET)?;
         decoded.body.answers(&decoded.signer, intent, &quote, now_secs())?;
+        self.accept = Some(decoded);
         self.swap_id = Some(prepared["swap_id"].as_str().context("swap id")?.to_string());
         self.hash_lock = Some(hash_lock);
         self.quote = Some(quote);
         Ok(bytes)
     }
 
-    /// Locks the NPT for the solver, refundable after the quote's Neptune lock time.
-    pub fn lock_npt(&mut self, accept_bytes: &[u8]) -> Result<NptLocked> {
+    /// Locks the NPT for the solver, refundable after the quote's Neptune lock time, and
+    /// returns the signed `npt_locked` message carrying the note.
+    pub fn lock_npt(&mut self) -> Result<Vec<u8>> {
         let (intent, quote) = (self.intent.as_ref().context("no intent")?, self.quote.as_ref().context("no quote")?);
         let from_height = self.neptune.tip()?;
         self.neptune_refund_ms = (now_secs() + quote.body.neptune_lock_secs) * 1000;
@@ -137,16 +123,23 @@ impl User {
                 "swap_id": self.swap_id,
             }),
         )?;
-        let note: HtlcNote = serde_json::from_value(locked["note"].clone())?;
-        Ok(NptLocked { accept: String::from_utf8(accept_bytes.to_vec())?, note, from_height })
+        let message = NptLocked {
+            v: PROTOCOL_VERSION,
+            deal: self.accept.as_ref().context("no accept")?.digest.clone(),
+            note: locked["note"].clone(),
+            from_height,
+        };
+        Ok(Signed::sign(&message, &self.did, NET)?.encode()?)
     }
 
     /// Checks the solver's ETH lock on chain, then claims it, which publishes the secret.
-    pub fn claim_eth(&self, evm: &EvmChain, locked: &EthLocked) -> Result<String> {
-        let quote = self.quote.as_ref().context("no quote")?;
-        let contract = parse_address(&locked.contract).context("contract")?;
+    pub fn claim_eth(&self, evm: &EvmChain, evm_locked: &[u8]) -> Result<String> {
+        let (quote, accept) = (self.quote.as_ref().context("no quote")?, self.accept.as_ref().context("no accept")?);
+        let locked: Decoded<EvmLocked> = decode(evm_locked, now_secs(), NET)?;
+        locked.body.answers(&locked.signer, accept, quote)?;
+        let contract = parse_address(&locked.body.contract).context("contract")?;
         ensure!(contract == evm.contract, "the ETH lock is in another contract");
-        let id = parse_word(&locked.id).context("id")?;
+        let id = parse_word(&locked.body.id).context("id")?;
         let lock = evm.lock_view(&id)?;
         let solver = parse_address(&quote.body.refund_key).context("solver key")?;
         ensure!(lock.sender == solver, "not locked by the solver that quoted");
@@ -181,7 +174,8 @@ pub struct Solver {
     quote: Option<Decoded<Quote>>,
     accept: Option<Decoded<Accept>>,
     claim_index: u64,
-    npt: Option<NptLocked>,
+    /// The checked NPT lock: its note and where to search from.
+    npt: Option<(HtlcNote, u64)>,
     eth_lock: Option<Word>,
 }
 
@@ -218,6 +212,11 @@ impl Solver {
         Ok(bytes)
     }
 
+    /// The DID the current intent came from (one-time): replies are sealed to it.
+    pub fn user_did(&self) -> Option<intents_protocol::DidKey> {
+        self.intent.as_ref().map(|i| i.signer)
+    }
+
     pub fn take_accept(&mut self, accept_bytes: &[u8]) -> Result<()> {
         let accept: Decoded<Accept> = decode(accept_bytes, now_secs(), NET)?;
         let (intent, quote) = (self.intent.as_ref().context("no intent")?, self.quote.as_ref().context("no quote")?);
@@ -226,14 +225,18 @@ impl Solver {
         Ok(())
     }
 
-    /// Checks the user's NPT lock against the agreed terms and on its own node.
-    pub fn check_npt_lock(&mut self, locked: NptLocked, min_depth: u64) -> Result<u64> {
+    /// Checks the user's signed `npt_locked`: this deal, from the NPT giver, the note against
+    /// the agreed terms, and the lock on the solver's own node at depth.
+    pub fn check_npt_lock(&mut self, npt_locked: &[u8], min_depth: u64) -> Result<u64> {
         let (intent, quote, accept) = (
             self.intent.as_ref().context("no intent")?,
             self.quote.as_ref().context("no quote")?,
             self.accept.as_ref().context("no accept")?,
         );
-        let note = &locked.note;
+        let locked: Decoded<NptLocked> = decode(npt_locked, now_secs(), NET)?;
+        locked.body.answers(&locked.signer, accept, &accept.signer)?;
+        let note: HtlcNote = serde_json::from_value(locked.body.note.clone()).context("not an HTLC note")?;
+        let note = &note;
         note.check()?;
         let htlc = note.htlc()?;
         ensure!(Some(hex(&htlc.hash_lock)[2..].to_string()) == accept.body.hash_lock, "not the accepted hash lock");
@@ -244,22 +247,23 @@ impl Solver {
         );
         let least_refund_ms = (quote.body.expires_at.saturating_sub(300) + quote.body.neptune_lock_secs) * 1000;
         ensure!(htlc.refund_after >= least_refund_ms - 600_000, "the NPT lock refunds too early");
-        let status = self.neptune.call("htlc_status", json!({ "note": note, "from_height": locked.from_height }))?;
+        let status = self.neptune.call("htlc_status", json!({ "note": note, "from_height": locked.body.from_height }))?;
         ensure!(status["found"] == true, "the NPT lock is not on chain (yet)");
         let depth = status["depth"].as_u64().unwrap_or(0);
         ensure!(depth >= min_depth, "the NPT lock is {depth} blocks deep, {min_depth} needed");
-        self.npt = Some(locked);
+        self.npt = Some((note.clone(), locked.body.from_height));
         Ok(depth)
     }
 
-    /// Locks the quoted ETH for the user, refunding well before the NPT lock does.
-    pub fn lock_eth(&mut self, evm: &EvmChain) -> Result<EthLocked> {
+    /// Locks the quoted ETH for the user, refunding well before the NPT lock does, and
+    /// returns the signed `evm_locked` message saying where.
+    pub fn lock_eth(&mut self, evm: &EvmChain) -> Result<Vec<u8>> {
         let (quote, accept, npt) = (
             self.quote.as_ref().context("no quote")?,
             self.accept.as_ref().context("no accept")?,
             self.npt.as_ref().context("no checked NPT lock")?,
         );
-        let neptune_refund = npt.note.refund_after_ms / 1000;
+        let neptune_refund = npt.0.refund_after_ms / 1000;
         let evm_now = evm.node.now()?;
         let refund_after = other_refund_at(Chain::Ethereum, neptune_refund, quote.body.other_lock_secs, evm_now)?;
         let receiver = parse_address(&accept.body.claim_key).context("user key")?;
@@ -269,7 +273,13 @@ impl Solver {
         let id = lock_id(&self.eth.address, &receiver, &[0; 20], amount, &hash_lock, refund_after);
         ensure!(evm.lock_view(&id)?.sender == self.eth.address, "the ETH lock is not on chain");
         self.eth_lock = Some(id);
-        Ok(EthLocked { contract: hex(&evm.contract), id: hex(&id) })
+        let message = EvmLocked {
+            v: PROTOCOL_VERSION,
+            deal: accept.digest.clone(),
+            contract: eth_key_hex(&evm.contract),
+            id: hex(&id)[2..].to_string(),
+        };
+        Ok(Signed::sign(&message, &self.did, NET)?.encode()?)
     }
 
     /// Reads the secret from the user's ETH claim and claims the NPT with it.
@@ -288,11 +298,11 @@ impl Solver {
         self.neptune.call(
             "htlc_claim",
             json!({
-                "note": npt.note,
+                "note": npt.0,
                 "preimage": hex(&secret)[2..],
                 "claim_index": self.claim_index,
                 "fee": NPT_FEE,
-                "from_height": npt.from_height,
+                "from_height": npt.1,
             }),
         )?;
         Ok(())
