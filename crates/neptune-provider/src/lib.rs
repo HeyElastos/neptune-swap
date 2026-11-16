@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use light_core::neptune_primitives::network::Network as Chain;
+use light_core::swap::HtlcNote;
 use wallet::{Node, Wallets};
 
 use serde::Deserialize;
@@ -63,6 +64,43 @@ enum Request {
         network: String,
         to: String,
         amount: String,
+        fee: String,
+    },
+    HtlcClaimLock {
+        network: String,
+    },
+    HtlcLock {
+        network: String,
+        amount: String,
+        fee: String,
+        claim_lock: String,
+        refund_after_ms: u64,
+    },
+    HtlcStatus {
+        network: String,
+        #[serde(default)]
+        swap_id: Option<String>,
+        #[serde(default)]
+        note: Option<HtlcNote>,
+        #[serde(default)]
+        from_height: u64,
+    },
+    HtlcSecret {
+        network: String,
+        swap_id: String,
+    },
+    HtlcClaim {
+        network: String,
+        note: HtlcNote,
+        preimage: String,
+        claim_index: u64,
+        fee: String,
+        #[serde(default)]
+        from_height: u64,
+    },
+    HtlcRefund {
+        network: String,
+        swap_id: String,
         fee: String,
     },
     Shutdown {},
@@ -178,6 +216,20 @@ impl Provider {
             }
             Request::WalletSend { network, to, amount, fee } => self.wallet(&network, |w, n| {
                 w.wallets.send(&n.id, n.chain, &to, &amount, &fee, now_ms(), &HttpNode(n.rpc))
+            }),
+            Request::HtlcClaimLock { network } => self.wallet(&network, |w, n| w.wallets.htlc_claim_lock(&n.id, n.chain)),
+            Request::HtlcLock { network, amount, fee, claim_lock, refund_after_ms } => self.wallet(&network, |w, n| {
+                w.wallets.htlc_lock(&n.id, n.chain, &amount, &fee, &claim_lock, refund_after_ms, now_ms(), &HttpNode(n.rpc))
+            }),
+            Request::HtlcStatus { network, swap_id, note, from_height } => self.wallet(&network, |w, n| {
+                w.wallets.htlc_status(&n.id, swap_id.as_deref(), note, from_height, &HttpNode(n.rpc))
+            }),
+            Request::HtlcSecret { network, swap_id } => self.wallet(&network, |w, n| w.wallets.htlc_secret(&n.id, &swap_id)),
+            Request::HtlcClaim { network, note, preimage, claim_index, fee, from_height } => self.wallet(&network, |w, n| {
+                w.wallets.htlc_claim(&n.id, n.chain, note, &preimage, claim_index, &fee, from_height, now_ms(), &HttpNode(n.rpc))
+            }),
+            Request::HtlcRefund { network, swap_id, fee } => self.wallet(&network, |w, n| {
+                w.wallets.htlc_refund(&n.id, n.chain, &swap_id, &fee, now_ms(), &HttpNode(n.rpc))
             }),
             Request::Shutdown {} => ok(None),
         }

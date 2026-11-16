@@ -8,6 +8,8 @@
 //! - `state.json`: light-core's `WalletState` (coins, sync point). Private, but
 //!   it cannot spend.
 
+mod swaps;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -140,34 +142,14 @@ impl Wallets {
     /// node, the transaction built and proven here, then submitted. The wallet
     /// must be synced to the node's tip first.
     pub fn send(&self, network_id: &str, network: Network, to: &str, amount: &str, fee: &str, now_ms: u64, node: &dyn Node) -> Result<Value> {
-        // Catch up first: a coin spent in a block the wallet has not seen
-        // would make the node refuse the transaction.
         let mut wallet = self.load(network_id, network)?.context("no wallet")?;
-        let tip = rpc::parse_height(&node.call(rpc::height_request())?)?;
-        if tip.saturating_sub(wallet.state().sync.map_or(0, |s| s.height)) > SYNC_STEP {
-            bail!("the wallet is far behind the node; sync it first");
-        }
-        let start = wallet.state().sync.map_or(0, |s| s.height + 1);
-        let mut from = start;
-        while from <= tip {
-            let to = tip.min(from + BATCH - 1);
-            wallet.apply_blocks(blocks(node, from, to)?)?;
-            from = to + 1;
-        }
+        catch_up(&mut wallet, node)?;
         let plan = wallet.plan_spend(amount, fee, now_ms)?;
         let snapshot = rpc::parse_membership_snapshot(
             &node.call(rpc::restore_membership_proof_request(plan.index_sets.clone()))?,
         )?;
         let (details, built) = wallet.build_payment(to, &plan, snapshot, now_ms)?;
-        let transaction = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?
-            .block_on(light_core::send::prove(&details))?;
-        let rpc_transaction = light_core::neptune_rpc_api::model::wallet::transaction::RpcTransaction::try_from(transaction)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        if !rpc::parse_submitted(&node.call(rpc::submit_transaction_request(rpc_transaction))?)? {
-            bail!("the node did not accept the transaction");
-        }
+        prove_and_submit(&details, node)?;
         // The change key index moved on; the spent coins show as spent once
         // a block includes the transaction.
         self.save_state(network_id, &wallet)?;
@@ -181,6 +163,38 @@ impl Wallets {
             "synced_height": wallet.state().sync.map(|s| s.height),
         }))
     }
+}
+
+/// Applies the blocks the wallet has not seen, up to the node's tip, and
+/// returns the tip. A coin spent in an unseen block would make the node refuse
+/// a transaction that spends it again.
+fn catch_up(wallet: &mut LightWallet, node: &dyn Node) -> Result<u64> {
+    let tip = rpc::parse_height(&node.call(rpc::height_request())?)?;
+    if tip.saturating_sub(wallet.state().sync.map_or(0, |s| s.height)) > SYNC_STEP {
+        bail!("the wallet is far behind the node; sync it first");
+    }
+    let mut from = wallet.state().sync.map_or(0, |s| s.height + 1);
+    while from <= tip {
+        let to = tip.min(from + BATCH - 1);
+        wallet.apply_blocks(blocks(node, from, to)?)?;
+        from = to + 1;
+    }
+    Ok(tip)
+}
+
+/// Proves the transaction (checking every lock and type script first) and
+/// hands it to the node.
+fn prove_and_submit(details: &light_core::neptune_wallet::transaction_details::TransactionDetails, node: &dyn Node) -> Result<()> {
+    let transaction = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(light_core::send::prove(details))?;
+    let rpc_transaction = light_core::neptune_rpc_api::model::wallet::transaction::RpcTransaction::try_from(transaction)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    if !rpc::parse_submitted(&node.call(rpc::submit_transaction_request(rpc_transaction))?)? {
+        bail!("the node did not accept the transaction");
+    }
+    Ok(())
 }
 
 fn tip_block(node: &dyn Node) -> Result<light_core::neptune_rpc_api::model::wallet::block::RpcWalletBlock> {
@@ -277,6 +291,38 @@ mod tests {
         assert_eq!(imported["address"], created["address"]);
         assert!(other.import("neptune-test", Network::Main, "not a phrase", 0, &node).is_err());
         assert!(Wallets::new(None).status("neptune-main", Network::Main).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn swap_keys_are_handed_out_in_turn_and_kept_private() {
+        let root = temp_root();
+        let wallets = Wallets::new(Some(root.clone()));
+        let node = FixtureNode::new();
+        wallets.create("neptune-main", Network::Main, &node).unwrap();
+        let first = wallets.htlc_claim_lock("neptune-main", Network::Main).unwrap();
+        let second = wallets.htlc_claim_lock("neptune-main", Network::Main).unwrap();
+        assert_eq!((first["index"].as_u64(), second["index"].as_u64()), (Some(0), Some(1)));
+        assert_ne!(first["claim_lock"], second["claim_lock"]);
+        let mode = fs::metadata(root.join("neptune-main/swaps.json")).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn swap_requests_are_checked_before_any_spend() {
+        let root = temp_root();
+        let wallets = Wallets::new(Some(root.clone()));
+        let node = FixtureNode::new();
+        wallets.create("neptune-main", Network::Main, &node).unwrap();
+        let lock = wallets.htlc_claim_lock("neptune-main", Network::Main).unwrap();
+        let claim_lock = lock["claim_lock"].as_str().unwrap();
+        let past = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", claim_lock, 1_000, 2_000, &node);
+        assert!(past.unwrap_err().to_string().contains("future"));
+        let bad = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", "not a digest", 3_000, 2_000, &node);
+        assert!(bad.unwrap_err().to_string().contains("claim lock"));
+        assert!(wallets.htlc_secret("neptune-main", "nope").is_err());
+        assert!(wallets.htlc_status("neptune-main", None, None, 0, &node).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

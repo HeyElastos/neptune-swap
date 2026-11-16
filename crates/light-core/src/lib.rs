@@ -40,6 +40,7 @@ use tasm_lib::prelude::Tip5;
 
 pub use neptune_primitives;
 pub use neptune_rpc_api;
+pub use neptune_wallet;
 
 /// Keys derived past the highest one that has received a coin, per key type.
 /// neptune-wallet-app uses the same look-ahead.
