@@ -112,7 +112,22 @@ First slice, built and tested:
   chains. Whether the ELA main chain's script supports a SHA-256 hashlock with a timelock
   refund (the HTLC the swap needs) is not checked yet.
 
-**Runtime registration (answered):** the Runtime hard-codes its providers. Adding
+**elastOS 2.0.1 (installed on this Mac 2026-11-16; source read at v2.0.1, bde18c7b):**
+- `elastos run` refuses web projections ("opens through Home") and native providers outside
+  a fixed supported set (`run_cmd.rs`). `elastos capsule` does not run Home apps either.
+- Home serves `/apps/<name>/` only for apps listed under `external` in `components.json`
+  (`capsule_inventory.rs`). On an installed Home that file is pinned by SHA-256 in the
+  signed release descriptor (`installed_release.rs`); editing it breaks that binding
+  ("Installed release inputs require repair"). Unsigned capsules run only from the signed
+  release; `dev_mode = true` applies only to a source/development Home (`runtime.rs`).
+- The gateway still forwards provider calls only for `documents`, `object`, `chain`, `net`,
+  `inspect`, `model`, each to named first-party apps; any other scheme, `neptune` included,
+  is 404 (`gateway_provider_proxy.rs`). Third-party apps get no `chain` or `wallet` ops.
+- So on the installed Home the capsule cannot be added without breaking its signed release,
+  and even when shown it reaches no provider. Testing needs a source Home (own data dir,
+  `dev_mode`), and the `neptune` provider needs a Runtime change there or upstream.
+
+**Runtime registration (answered for 57eb779):** the Runtime hard-codes its providers. Adding
 `neptune` needs a Runtime change: a scheme arm in
 `elastos-server/src/provider_resource.rs`, a launch in `server_infra.rs`, and a
 `components.json` entry with the binary's checksum. Until then the provider runs
