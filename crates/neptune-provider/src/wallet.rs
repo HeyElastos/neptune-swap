@@ -90,6 +90,11 @@ impl Wallets {
             bail!("a wallet already exists for {network_id}");
         }
         fs::create_dir_all(&dir)?;
+        // The wallet's folder and the data root above it: owner only.
+        use std::os::unix::fs::PermissionsExt;
+        for folder in [dir.as_path(), dir.parent().unwrap_or(&dir)] {
+            fs::set_permissions(folder, fs::Permissions::from_mode(0o700))?;
+        }
         write_private(&dir.join("phrase"), phrase.as_bytes())?;
         self.save_state(network_id, wallet)
     }
@@ -366,6 +371,9 @@ mod tests {
         assert_eq!(phrase.split(' ').count(), 18);
         let mode = fs::metadata(root.join("neptune-main/phrase")).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+        for folder in [root.clone(), root.join("neptune-main")] {
+            assert_eq!(fs::metadata(folder).unwrap().permissions().mode() & 0o777, 0o700);
+        }
 
         let status = wallets.status("neptune-main", Network::Main).unwrap();
         assert_eq!(status["synced_height"], 62980);
