@@ -52,6 +52,9 @@ fn swap_locks_come_from_the_seed() {
     assert_eq!(a.swap_lock(0), a_again.swap_lock(0), "a restored seed has the same swap keys");
     assert_ne!(a.swap_lock(0), a.swap_lock(1));
     assert_ne!(a.swap_lock(0), b.swap_lock(0));
+    // One stable solver key per seed, apart from the swap keys.
+    assert_eq!(a.solver_key_seed(), a_again.solver_key_seed());
+    assert_ne!(a.solver_key_seed(), b.solver_key_seed());
 }
 
 #[test]

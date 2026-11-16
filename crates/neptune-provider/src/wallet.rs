@@ -275,6 +275,33 @@ impl Wallets {
         Ok(json!({ "kind": kind, "index": issued.index, "address": issued.address }))
     }
 
+    /// This wallet's solver identity: a `did:key` from its seed, the same on
+    /// every restore. The key stays here; only signatures leave.
+    pub fn solver_identity(&self, network_id: &str, network: Network) -> Result<Value> {
+        let wallet = self.load(network_id, network)?.context("no wallet")?;
+        let key = ed25519_dalek::SigningKey::from_bytes(&wallet.solver_key_seed());
+        Ok(json!({ "did": intents_protocol::DidKey::new(key.verifying_key()).to_string(), "topic": offers_topic(network) }))
+    }
+
+    /// Checks `offer` and signs it with the solver key, for publishing on the
+    /// public offers topic: the envelope as base64url, as the carrier carries it.
+    pub fn offer_sign(&self, network_id: &str, network: Network, offer: &intents_protocol::Offer, now_secs: u64) -> Result<Value> {
+        use base64::Engine as _;
+        use intents_protocol::Message as _;
+        offer.validate(now_secs).map_err(|e| anyhow::anyhow!("not a valid offer: {e}"))?;
+        let wallet = self.load(network_id, network)?.context("no wallet")?;
+        let key = ed25519_dalek::SigningKey::from_bytes(&wallet.solver_key_seed());
+        let net = if network == Network::Main { intents_protocol::Net::Main } else { intents_protocol::Net::Test };
+        let bytes = intents_protocol::Signed::sign(offer, &key, net)
+            .and_then(|s| s.encode())
+            .map_err(|e| anyhow::anyhow!("signing failed: {e}"))?;
+        Ok(json!({
+            "did": intents_protocol::DidKey::new(key.verifying_key()).to_string(),
+            "topic": offers_topic(network),
+            "message": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+        }))
+    }
+
     /// Every payment, newest first, pending ones included.
     pub fn history(&self, network_id: &str, network: Network) -> Result<Value> {
         let wallet = self.load(network_id, network)?.context("no wallet")?;
@@ -340,6 +367,11 @@ fn tip_block(node: &dyn Node) -> Result<light_core::neptune_rpc_api::model::wall
 
 fn blocks(node: &dyn Node, from: u64, to: u64) -> Result<Vec<light_core::neptune_rpc_api::model::wallet::block::RpcWalletBlock>> {
     rpc::parse_blocks(&node.call(rpc::get_blocks_request(from, to))?)
+}
+
+/// Main net offers on their own topic; every other network shares the test one.
+fn offers_topic(network: Network) -> &'static str {
+    if network == Network::Main { intents_protocol::OFFERS_TOPIC_MAIN } else { intents_protocol::OFFERS_TOPIC_TEST }
 }
 
 fn now_ms() -> u64 {
@@ -499,6 +531,39 @@ mod tests {
         assert!(unknown.unwrap_err().to_string().contains("no such prepared swap"));
         assert!(wallets.htlc_status("neptune-main", None, None, 0, &node).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_solver_signs_offers_with_one_stable_did() {
+        use base64::Engine as _;
+        let root = temp_root();
+        let wallets = Wallets::new(Some(root.clone()));
+        wallets.create("neptune-main", Network::Main, &FixtureNode::new()).unwrap();
+        let id = wallets.solver_identity("neptune-main", Network::Main).unwrap();
+        assert!(id["did"].as_str().unwrap().starts_with("did:key:z6Mk"));
+        assert_eq!(id["topic"], "neptune-swap/offers/main");
+        let now = 1_800_000_000;
+        let offer = intents_protocol::Offer {
+            v: intents_protocol::PROTOCOL_VERSION,
+            id: "0123456789abcdef0123456789abcdef".into(),
+            give: intents_protocol::Asset::npt(),
+            want: intents_protocol::Asset { chain: intents_protocol::Chain::Ethereum, symbol: "USDC".into() },
+            rate_give: intents_protocol::Amount::new(4 * 10u128.pow(30)),
+            rate_want: intents_protocol::Amount::new(150_000),
+            min_give: intents_protocol::Amount::new(4 * 10u128.pow(31)),
+            max_give: intents_protocol::Amount::new(4 * 10u128.pow(34)),
+            expires_at: now + 1800,
+            withdrawn: false,
+        };
+        let signed = wallets.offer_sign("neptune-main", Network::Main, &offer, now).unwrap();
+        assert_eq!(signed["did"], id["did"]);
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(signed["message"].as_str().unwrap()).unwrap();
+        let decoded = intents_protocol::decode::<intents_protocol::Offer>(&bytes, now, intents_protocol::Net::Main).unwrap();
+        assert_eq!(decoded.signer.to_string(), id["did"].as_str().unwrap());
+        assert_eq!(decoded.body, offer);
+        // An invalid or expired offer is not signed.
+        assert!(wallets.offer_sign("neptune-main", Network::Main, &offer, now + 3600).is_err());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

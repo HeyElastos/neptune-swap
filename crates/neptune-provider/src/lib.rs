@@ -126,6 +126,15 @@ enum Request {
     /// Reference prices in USD (display only), when the configuration allows
     /// asking public sources.
     Prices {},
+    /// The wallet's solver `did:key` and the offers topic of its network.
+    SolverIdentity {
+        network: String,
+    },
+    /// Checks and signs a standing offer with the solver key.
+    OfferSign {
+        network: String,
+        offer: intents_protocol::Offer,
+    },
     Shutdown {},
 }
 
@@ -285,6 +294,10 @@ impl Provider {
             Request::HtlcRefund { network, swap_id, fee } => self.wallet(&network, |w, n| {
                 w.wallets.htlc_refund(&n.id, n.chain, &swap_id, &fee, now_ms(), &HttpNode(n.rpc.clone()))
             }),
+            Request::SolverIdentity { network } => self.wallet(&network, |w, n| w.wallets.solver_identity(&n.id, n.chain)),
+            Request::OfferSign { network, offer } => {
+                self.wallet(&network, |w, n| w.wallets.offer_sign(&n.id, n.chain, &offer, now_ms() / 1000))
+            }
             Request::Prices {} if !self.price_sources => {
                 error("prices_disabled", "this Home does not ask public price sources")
             }

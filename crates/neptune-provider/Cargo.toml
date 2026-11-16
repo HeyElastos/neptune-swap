@@ -11,6 +11,9 @@ serde_json.workspace = true
 # tls: only for a development remote node (allow_remote_nodes); local nodes are plain http.
 ureq = { version = "2", default-features = false, features = ["tls"] }
 light-core = { path = "../light-core" }
+intents-protocol = { path = "../intents-protocol" }
+ed25519-dalek = "2"
+base64 = "0.22"
 anyhow.workspace = true
 tokio = { version = "1.47", features = ["rt"] }
 

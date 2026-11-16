@@ -2,7 +2,8 @@
 //!
 //! A user's capsule sends an [`Intent`] (what it gives and the least it wants
 //! back) to a few solver DIDs. Solvers answer with a [`Quote`]. The user picks
-//! one with an [`Accept`]. Every message travels as a [`Signed`] envelope from a
+//! one with an [`Accept`]. Solvers may also publish standing [`Offer`]s on a
+//! public topic, signed but not sealed, so users see who trades at what rate. Every message travels as a [`Signed`] envelope from a
 //! `did:key` (Ed25519); a user signs each intent with a fresh key so solvers
 //! cannot link one user's trades.
 //!
@@ -40,6 +41,7 @@ mod canonical;
 mod did;
 mod error;
 mod message;
+mod offer;
 mod seal;
 mod signed;
 
@@ -51,6 +53,7 @@ pub use did::DidKey;
 pub use error::Error;
 pub use message::{may_reveal, other_refund_at, Accept, Amount, Asset, Chain, EvmLocked, Intent, Message, NptLocked, Quote, ASSETS};
 pub use signed::{decode, Decoded, Net, Signed};
+pub use offer::{Offer, OFFERS_TOPIC_MAIN, OFFERS_TOPIC_TEST};
 pub use seal::{open, seal, MAX_SEALED_BYTES};
 
 /// The protocol version every message carries in its `v` field.

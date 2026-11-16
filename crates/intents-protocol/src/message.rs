@@ -89,7 +89,7 @@ impl Asset {
         *self == Self::npt()
     }
 
-    fn validate(&self, field: &'static str) -> Result<(), Error> {
+    pub(crate) fn validate(&self, field: &'static str) -> Result<(), Error> {
         if ASSETS.iter().any(|(chain, symbol, ..)| *chain == self.chain && *symbol == self.symbol) {
             Ok(())
         } else {
@@ -423,7 +423,7 @@ fn check_key(field: &'static str, key: &str, chain: Chain) -> Result<(), Error> 
     check_hex(field, key, chain.key_hex_len())
 }
 
-fn check_version(v: u16) -> Result<(), Error> {
+pub(crate) fn check_version(v: u16) -> Result<(), Error> {
     if v == PROTOCOL_VERSION {
         Ok(())
     } else {
@@ -431,7 +431,7 @@ fn check_version(v: u16) -> Result<(), Error> {
     }
 }
 
-fn check_hex(field: &'static str, s: &str, len: usize) -> Result<(), Error> {
+pub(crate) fn check_hex(field: &'static str, s: &str, len: usize) -> Result<(), Error> {
     if s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
         Ok(())
     } else {
@@ -440,7 +440,7 @@ fn check_hex(field: &'static str, s: &str, len: usize) -> Result<(), Error> {
 }
 
 /// Live, and not further ahead than [`MAX_TTL_SECS`].
-fn check_expiry(expires_at: u64, now: u64) -> Result<(), Error> {
+pub(crate) fn check_expiry(expires_at: u64, now: u64) -> Result<(), Error> {
     if expires_at <= now {
         Err(Error::Expired(expires_at))
     } else if expires_at > now.saturating_add(MAX_TTL_SECS) {
@@ -450,7 +450,7 @@ fn check_expiry(expires_at: u64, now: u64) -> Result<(), Error> {
     }
 }
 
-fn check_positive(field: &'static str, amount: Amount) -> Result<(), Error> {
+pub(crate) fn check_positive(field: &'static str, amount: Amount) -> Result<(), Error> {
     if amount.units() > 0 {
         Ok(())
     } else {

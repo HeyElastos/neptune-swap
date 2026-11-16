@@ -112,6 +112,7 @@ pub enum HtlcSpend {
 }
 
 const SWAP_DOMAIN: &[u8] = b"neptune-intents/htlc-secret/v1";
+const SOLVER_DOMAIN: &[u8] = b"neptune-swap/solver-key/v1";
 
 impl LightWallet {
     /// The secret behind swap key `index`. Derived from the seed at a block
@@ -121,6 +122,22 @@ impl LightWallet {
         // BlockHeight clamps at the field's largest element: count down from there.
         let height = BlockHeight::from(tasm_lib::triton_vm::prelude::BFieldElement::MAX - index);
         self.entropy.generate_sender_randomness(height, domain)
+    }
+
+    /// The seed of this wallet's long-lived solver signing key (Ed25519): the
+    /// same seed always gives the same solver DID, so offers and reputation
+    /// survive a restore. Its own domain, and heights below the swap keys'.
+    pub fn solver_key_seed(&self) -> [u8; 32] {
+        use sha2::Digest as _;
+        let domain = Tip5::hash_varlen(&SOLVER_DOMAIN.iter().map(|b| u64::from(*b).into()).collect::<Vec<_>>());
+        let height = BlockHeight::from(tasm_lib::triton_vm::prelude::BFieldElement::MAX - (1u64 << 40));
+        let secret = self.entropy.generate_sender_randomness(height, domain);
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(SOLVER_DOMAIN);
+        for e in secret.values() {
+            hasher.update(e.value().to_le_bytes());
+        }
+        hasher.finalize().into()
     }
 
     /// The lock (hash of the secret) of swap key `index`: what this wallet
