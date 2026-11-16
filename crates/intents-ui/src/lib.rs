@@ -4,6 +4,8 @@
 
 mod backdrop;
 mod intent;
+mod offers;
+mod offers_ui;
 mod qr;
 mod runtime;
 mod usd;
@@ -96,6 +98,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
     }
 
     wallet_ui::wire(&app, token.clone());
+    offers_ui::wire(&app, token.clone());
     demo(&app);
     match token {
         Some(token) => {
@@ -396,6 +399,10 @@ fn demo(app: &AppWindow) {
     }
     app.set_give_amount("250".into());
     app.set_want_amount("1.5".into());
+    if state == "offers" || state == "solver" {
+        offers_ui::demo(app, &state);
+        return;
+    }
     if state == "prices" || state == "review-prices" {
         // Reference prices as the provider gives them (no network here).
         let prices = json!({"prices": {"NPT": {"usd": "0.1499"}, "USDC": {"usd": "0.9997"}, "BTC": {"usd": "64505.9"}, "ETH": {"usd": "1819.88"}}});

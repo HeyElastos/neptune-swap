@@ -231,7 +231,7 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
     }
 }
 
-fn network(app: &AppWindow) -> Option<String> {
+pub(crate) fn network(app: &AppWindow) -> Option<String> {
     app.get_networks().row_data(app.get_network_index() as usize).map(|n| n.to_string())
 }
 

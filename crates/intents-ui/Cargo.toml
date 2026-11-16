@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 qrcode = { version = "0.14.1", default-features = false }
 intents-protocol = { path = "../intents-protocol" }
+base64 = "0.22"
 serde_json.workspace = true
 # Slint drawing with winit and femtovg (WebGL2 on the web).
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "accessibility"] }
@@ -29,6 +30,9 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = ["Window", "Location", "Headers", "Request", "RequestInit", "Response", "Crypto", "EventTarget", "Event", "MessageEvent", "Document", "HtmlDocument", "Element", "HtmlElement", "HtmlTextAreaElement", "HtmlHeadElement", "DomTokenList", "CssStyleDeclaration", "Node", "KeyboardEvent"] }
+
+[dev-dependencies]
+ed25519-dalek = "2"
 
 [build-dependencies]
 slint-build = "=1.18.1"

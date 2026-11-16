@@ -49,6 +49,15 @@ mod web {
     }
 
     pub async fn provider(op: &str, body: &Value, token: &str) -> Result<Value, ProviderError> {
+        call("neptune", op, body, token).await
+    }
+
+    /// The carrier, through the gateway's peer route for this app.
+    pub async fn peer(op: &str, body: &Value, token: &str) -> Result<Value, ProviderError> {
+        call("peer", op, body, token).await
+    }
+
+    async fn call(scheme: &str, op: &str, body: &Value, token: &str) -> Result<Value, ProviderError> {
         let headers = Headers::new().map_err(|_| failed("headers"))?;
         headers.set("content-type", "application/json").map_err(|_| failed("headers"))?;
         headers.set("x-elastos-home-token", token).map_err(|_| failed("headers"))?;
@@ -56,7 +65,7 @@ mod web {
         init.set_method("POST");
         init.set_headers(&headers);
         init.set_body(&JsValue::from_str(&body.to_string()));
-        let request = Request::new_with_str_and_init(&format!("/api/provider/neptune/{op}"), &init)
+        let request = Request::new_with_str_and_init(&format!("/api/provider/{scheme}/{op}"), &init)
             .map_err(|_| failed("The request could not be made."))?;
         let response: Response = JsFuture::from(window().fetch_with_request(&request))
             .await
@@ -70,7 +79,7 @@ mod web {
         // A typed refusal (an approval still open or turned down) says what it is.
         let typed = serde_json::from_str::<Value>(&text).ok().filter(|v| v["code"].is_string());
         if (response.status() == 401 || response.status() == 403) && typed.is_none() {
-            return Err(failed("This Home has not given the app Neptune access."));
+            return Err(failed(if scheme == "peer" { "This Home has not given the app carrier access." } else { "This Home has not given the app Neptune access." }));
         }
         let reply: Value = serde_json::from_str(&text)
             .map_err(|_| failed(format!("The Runtime answered {}.", response.status())))?;
@@ -380,7 +389,7 @@ mod web {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{announce, ask_text, copy_text, format_time, gateway, home_token, listen_clipboard, now_secs, page_and_origin, provider, query, show_text, sleep_ms};
+pub use web::{announce, ask_text, copy_text, format_time, gateway, home_token, listen_clipboard, now_secs, page_and_origin, peer, provider, query, show_text, sleep_ms};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn home_token() -> Option<String> {
@@ -446,6 +455,11 @@ pub fn page_and_origin() -> (String, String) {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn gateway(_method: &str, _path: &str, _body: Option<&Value>, _token: &str) -> Result<Value, ProviderError> {
+    Err(ProviderError { code: String::new(), message: "Not in Home.".into() })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn peer(_op: &str, _body: &Value, _token: &str) -> Result<Value, ProviderError> {
     Err(ProviderError { code: String::new(), message: "Not in Home.".into() })
 }
 

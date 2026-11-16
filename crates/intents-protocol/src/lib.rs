@@ -53,7 +53,7 @@ pub use did::DidKey;
 pub use error::Error;
 pub use message::{may_reveal, other_refund_at, Accept, Amount, Asset, Chain, EvmLocked, Intent, Message, NptLocked, Quote, ASSETS};
 pub use signed::{decode, Decoded, Net, Signed};
-pub use offer::{Offer, OFFERS_TOPIC_MAIN, OFFERS_TOPIC_TEST};
+pub use offer::{mul_div, Offer, OFFERS_TOPIC_MAIN, OFFERS_TOPIC_TEST};
 pub use seal::{open, seal, MAX_SEALED_BYTES};
 
 /// The protocol version every message carries in its `v` field.

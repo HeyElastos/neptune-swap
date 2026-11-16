@@ -96,7 +96,7 @@ impl Offer {
 
 /// floor or ceil of a * b / c without overflow (256-bit product), None if the
 /// result does not fit an amount or c is 0.
-fn mul_div(a: u128, b: u128, c: u128, round_up: bool) -> Option<u128> {
+pub fn mul_div(a: u128, b: u128, c: u128, round_up: bool) -> Option<u128> {
     if c == 0 {
         return None;
     }

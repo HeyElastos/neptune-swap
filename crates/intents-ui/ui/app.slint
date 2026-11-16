@@ -324,6 +324,73 @@ component ActivityItem inherits Rectangle {
     }
 }
 
+// Open offers for the pair the swap form shows. A row fills the form from it.
+component OffersCard inherits VerticalLayout {
+    in property <string> pair;
+    in property <string> status;
+    in property <[AddressRow]> rows;
+    callback take(int);
+    padding: Sp.l;
+    spacing: Sp.s;
+    HorizontalLayout {
+        spacing: Sp.s;
+        Text { text: "Open offers"; color: Skin.ink; font-size: Ty.body; font-weight: Ty.strong; vertical-alignment: center; }
+        Text { text: root.pair; color: Skin.muted; font-size: Ty.caption; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+    }
+    Text { text: root.status; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+    for entry[i] in root.rows: AddressItem { entry: entry; open => { root.take(i); } }
+}
+
+// Trading as a solver: standing offers published to everyone running the app.
+component SolverCard inherits VerticalLayout {
+    in property <string> did;
+    in-out property <int> side;
+    in-out property <int> other;
+    in-out property <string> price;
+    in-out property <string> min-npt;
+    in-out property <string> max-npt;
+    in property <string> error;
+    in property <string> note;
+    in property <bool> busy;
+    in property <[AddressRow]> mine;
+    property <[string]> others: ["USDC", "ETH", "BTC"];
+    callback publish();
+    callback withdraw(int);
+    padding: Sp.l;
+    spacing: Sp.m;
+    Text { text: "Trade as a solver"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; }
+    Text {
+        text: "Publish a standing offer. Everyone running Neptune Swap sees it, signed with your solver ID; takers then send you a sealed request. Offers stay live while this page is open.";
+        color: Skin.muted;
+        font-size: Ty.small;
+        wrap: word-wrap;
+    }
+    if root.did != "": Text { text: "Your solver ID: " + root.did; color: Skin.muted; font-size: Ty.caption; overflow: elide; }
+    HorizontalLayout {
+        alignment: start;
+        Segmented { options: ["I sell NPT", "I buy NPT"]; selected <=> root.side; }
+    }
+    HorizontalLayout {
+        alignment: start;
+        Segmented { options: root.others; selected <=> root.other; }
+    }
+    Field { label: "Price of 1 NPT in " + root.others[root.other]; placeholder: "0.15"; text <=> root.price; }
+    HorizontalLayout {
+        spacing: Sp.m;
+        Field { label: "Least NPT"; placeholder: "10"; text <=> root.min-npt; horizontal-stretch: 1; preferred-width: 0px; }
+        Field { label: "Most NPT"; placeholder: "1000"; text <=> root.max-npt; horizontal-stretch: 1; preferred-width: 0px; }
+    }
+    if root.error != "": Text { text: root.error; color: Skin.danger; font-size: Ty.small; wrap: word-wrap; }
+    if root.note != "": Text { text: root.note; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+    HorizontalLayout {
+        alignment: end;
+        Button { text: root.busy ? "Publishing…" : "Publish offer"; enabled: !root.busy; clicked => { root.publish(); } }
+    }
+    if root.mine.length > 0: Rectangle { height: 1px; background: Skin.edge; }
+    if root.mine.length > 0: Text { text: "Your offers · tap one to withdraw it"; color: Skin.muted; font-size: Ty.caption; }
+    for entry[i] in root.mine: AddressItem { entry: entry; open => { root.withdraw(i); } }
+}
+
 // The Neptune wallet. The seed lives with this Home's Neptune provider; the page shows the
 // phrase once, when it is made, and sends a typed one once, to import it.
 component WalletCard inherits VerticalLayout {
@@ -710,6 +777,23 @@ export component AppWindow inherits Window {
     callback amounts-changed();
     // The other chain's side: "" (nothing to say), "connect", "asking",
     // "connected" or "info", with its line of text.
+    // Open offers for the form's pair, and this Home's own as a solver.
+    in property <string> offers-pair;
+    in property <string> offers-status;
+    in property <[AddressRow]> offer-rows;
+    callback take-offer(int);
+    in property <string> solver-did;
+    in-out property <int> solver-side;
+    in-out property <int> solver-other;
+    in-out property <string> solver-price;
+    in-out property <string> solver-min;
+    in-out property <string> solver-max;
+    in property <string> solver-error;
+    in property <string> solver-note;
+    in property <bool> solver-busy;
+    in property <[AddressRow]> solver-mine;
+    callback publish-offer();
+    callback withdraw-offer(int);
     in property <string> other-leg-state;
     in property <string> other-leg;
     callback connect-wallet();
@@ -733,7 +817,7 @@ export component AppWindow inherits Window {
     in property <string> review-json;
     property <bool> show-json;
 
-    // 0: the swap, 1: the wallet.
+    // 0: the swap, 1: the wallet, 2: offers as a solver.
     in-out property <int> page;
     callback page-changed(int);
     changed page => { root.page-changed(self.page); }
@@ -965,17 +1049,37 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         alignment: start;
                         Segmented {
-                            options: ["Swap", "Wallet"];
+                            options: ["Swap", "Wallet", "Offer"];
                             selected <=> root.page;
                         }
                     }
                     Text {
                         text: root.page == 0
                             ? "Say what you want. Solvers compete in private, and the Neptune leg settles where nobody can see it."
-                            : "Your NPT, held by this Home's Neptune provider.";
+                            : root.page == 1 ? "Your NPT, held by this Home's Neptune provider."
+                            : "Offer NPT trades to everyone running Neptune Swap.";
                         color: Skin.ink;
                         font-size: Ty.small;
                         wrap: word-wrap;
+                    }
+                    if root.page == 2: Glass {
+                        height: solver-card.preferred-height;
+                        solver-card := SolverCard {
+                            // Known width, so wrapped lines count in its height.
+                            width: parent.width;
+                            did: root.solver-did;
+                            side <=> root.solver-side;
+                            other <=> root.solver-other;
+                            price <=> root.solver-price;
+                            min-npt <=> root.solver-min;
+                            max-npt <=> root.solver-max;
+                            error: root.solver-error;
+                            note: root.solver-note;
+                            busy: root.solver-busy;
+                            mine: root.solver-mine;
+                            publish => { root.publish-offer(); }
+                            withdraw(i) => { root.withdraw-offer(i); }
+                        }
                     }
                     if root.page == 1: Glass {
                         height: wallet-card.preferred-height;
@@ -1129,6 +1233,17 @@ export component AppWindow inherits Window {
                                 text: "Review swap";
                                 clicked => { root.review(); }
                             }
+                        }
+                    }
+                    if root.page == 0: Glass {
+                        height: offers-card.preferred-height;
+                        offers-card := OffersCard {
+                            // Known width, so wrapped lines count in its height.
+                            width: parent.width;
+                            pair: root.offers-pair;
+                            status: root.offers-status;
+                            rows: root.offer-rows;
+                            take(i) => { root.take-offer(i); }
                         }
                     }
                 }
