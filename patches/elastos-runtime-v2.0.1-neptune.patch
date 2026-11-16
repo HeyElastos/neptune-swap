@@ -1,5 +1,18 @@
+diff --git a/elastos/crates/elastos-runtime/src/provider/registry.rs b/elastos/crates/elastos-runtime/src/provider/registry.rs
+index f96bcf74..3b71342f 100755
+--- a/elastos/crates/elastos-runtime/src/provider/registry.rs
++++ b/elastos/crates/elastos-runtime/src/provider/registry.rs
+@@ -692,6 +692,8 @@ const RESERVED_SUB_NAMES: &[&str] = &[
+     "object",
+     "collaboration-direct",
+     "collaboration-profile",
++    // Local Neptune development fork.
++    "neptune",
+ ];
+ 
+ /// Reserved names for provider targets that only Runtime invocation can reach.
 diff --git a/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs b/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
-index c6742ea3..f9d5b8d2 100644
+index c6742ea3..5b3b1976 100644
 --- a/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
 +++ b/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
 @@ -1602,6 +1602,9 @@ pub(super) async fn gateway_library_events_stream(
@@ -12,14 +25,15 @@ index c6742ea3..f9d5b8d2 100644
  pub(super) async fn gateway_provider_proxy(
      State(state): State<GatewayState>,
      Path((scheme, op)): Path<(String, String)>,
-@@ -1702,6 +1705,18 @@ pub(super) async fn gateway_provider_proxy(
+@@ -1702,6 +1705,19 @@ pub(super) async fn gateway_provider_proxy(
                      .into_response()
              }
          },
 +        // Local Neptune development fork: the neptune-intents capsule reaches
 +        // the neptune provider's typed operations, nothing else does.
 +        "neptune" => match op.as_str() {
-+            "networks" | "status" => &[NEPTUNE_INTENTS_CAPSULE_ID],
++            "networks" | "status" | "wallet_status" | "wallet_create" | "wallet_import"
++            | "wallet_receive" | "wallet_sync" | "wallet_balance" => &[NEPTUNE_INTENTS_CAPSULE_ID],
 +            _ => {
 +                return (
 +                    StatusCode::NOT_FOUND,
