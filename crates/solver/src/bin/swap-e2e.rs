@@ -2,7 +2,12 @@
 //! node (scripts/regtest-node.sh) and anvil (chain id 8453) with NeptuneHtlc
 //! deployed. Run by scripts/swap-e2e.sh, which deploys the contract.
 //!
-//!   swap-e2e <contract> <user-npt-data> <solver-npt-data>
+//!   swap-e2e <contract> <user-npt-data> <solver-npt-data> [<runtime-coords.json>]
+//!
+//! With the coords of an elastOS node, every message goes over that node's
+//! carrier (gossip on a fresh topic) after the operator approves the peer
+//! capability in Home; both parties use the one node. Without, the sealed
+//! bytes are handed over directly.
 //!
 //! The user's EVM key is anvil's test account 2, standing in for elastOS Wallet
 //! on this local chain; the solver's is account 1.
@@ -15,6 +20,7 @@ use ed25519_dalek::SigningKey;
 use evm_htlc::{hex, parse_address};
 use evm_signer::{Node, Wallet};
 use intents_protocol::{open, seal, DidKey};
+use solver::carrier::Carrier;
 use solver::neptune::Provider;
 use solver::roles::{EvmChain, Solver, User};
 
@@ -56,7 +62,31 @@ fn main() -> Result<()> {
     // Every message is sealed to its recipient's DID and opened with its key: the
     // only hand-over here is the bytes (the carrier comes next).
     let solver_did = DidKey::new(solver.did.verifying_key());
-    let to_solver = |bytes: &[u8], key: &SigningKey| -> Result<Vec<u8>> { Ok(open(key, &seal(&solver_did, bytes)?)?) };
+    let carrier = match args.get(3) {
+        Some(coords) => {
+            let c = Carrier::connect(
+                coords.as_ref(),
+                "neptune-intents",
+                "solver",
+                "Neptune swaps: the solver's intents topic",
+                Duration::from_secs(280),
+            )?;
+            let topic = format!("neptune-intents-dev-{:x}", rand::random::<u64>());
+            c.join(&topic)?;
+            let user = c.party("user");
+            println!("   carrier: joined {topic}");
+            Some((c, user, topic))
+        }
+        None => None,
+    };
+    // Sends `sealed` from one party and returns what the other receives.
+    let hop = |sealed: Vec<u8>, to_solver: bool| -> Result<Vec<u8>> {
+        let Some((solver_side, user_side, topic)) = &carrier else { return Ok(sealed) };
+        let (from, to) = if to_solver { (user_side, solver_side) } else { (solver_side, user_side) };
+        from.send(topic, &sealed)?;
+        wait("a carrier message", || to.recv(topic)?.pop().context("nothing yet"))
+    };
+    let to_solver = |bytes: &[u8], key: &SigningKey| -> Result<Vec<u8>> { Ok(open(key, &hop(seal(&solver_did, bytes)?, true)?)?) };
 
     // 1. The user asks: 2 NPT for at least 0.9 ETH, sealed to the solver.
     let intent = user.intent(2 * NAU_PER_NPT, 9 * 10u128.pow(17))?;
@@ -66,7 +96,7 @@ fn main() -> Result<()> {
     // 2. The solver quotes, sealed to the intent's one-time DID.
     let quote = solver.quote(&intent)?;
     let user_did = solver.user_did().context("no intent")?;
-    let quote = open(&user.did, &seal(&user_did, &quote)?)?;
+    let quote = open(&user.did, &hop(seal(&user_did, &quote)?, false)?)?;
     println!("2. quote ({} bytes): 1 ETH, ETH lock 2 h, NPT lock 7 h", quote.len());
     // 3. The user accepts with the hash lock (it holds the secret).
     let accept = user.accept(&quote)?;
@@ -79,7 +109,7 @@ fn main() -> Result<()> {
     let depth = wait("the NPT lock", || solver.check_npt_lock(&npt_locked, 3))?;
     println!("5. solver checked the NPT lock: this deal, agreed terms, {depth} blocks deep");
     // 6. The solver locks the ETH for the user and says where (evm_locked).
-    let evm_locked = open(&user.did, &seal(&user_did, &solver.lock_eth(&evm)?)?)?;
+    let evm_locked = open(&user.did, &hop(seal(&user_did, &solver.lock_eth(&evm)?)?, false)?)?;
     println!("6. solver locked 1 ETH; evm_locked ({} bytes) to the user", evm_locked.len());
     // 7. The user checks the ETH lock on chain and claims it: the secret goes public.
     let claim = user.claim_eth(&evm, &evm_locked)?;

@@ -169,7 +169,7 @@ capsule" is the wallet's UI. Everything is developed against a local **regtest**
 | M6 | Wallet screens in the capsule (Slint): address + QR, balance, history, send | **built**: create/back up/import, sync, balance, send (form → review → confirm), receive with Private (Generation) or Short (EC Hybrid, QR) addresses and New address, activity (received/sent/pending, block and time). Seen in the dev Home: balance 14.95 NPT after sync (2026-11-16); addresses, QR and activity verified on regtest through the provider (an EC Hybrid payment shows as such), not yet clicked through in Home |
 | M7 | Neptune HTLC lock/claim/refund in the provider (`crates/htlc`), swap-guard on the verified tip | **lock → claim and lock → refund done on regtest** (2026-11-16, release provider, two wallets): see "HTLC on regtest" below. swap-guard on the verified tip not wired yet; the capsule does not call the htlc ops yet (gateway list unchanged) |
 | M8 | Other leg through elastOS Wallet: the fork lets the capsule request `wallet`/`chain` approvals; EVM HTLC contract and Bitcoin HTLC script on their testnets | **EVM contract done** (`contracts/htlc-evm`, 9 forge tests; `crates/evm-htlc`, 5 tests, builds for wasm32; `scripts/evm-htlc-local.sh` lock→claim and lock→refund on local anvil, chain id 8453). **Route done**: the fork lets `neptune-intents` use the Browser app's Wallet bridge (request-accounts → request-transaction → Wallet passkey approval → broadcast-transaction, reads), bound to the calling app; the dev Home's Base is the local anvil chain (`BASE_RPC_URL`). Call sequence for the capsule: `docs/wallet-bridge.md`. Not yet: the capsule's calls (UI session), the NPT↔ETH flow through it. Bitcoin: Wallet has BTC accounts and node reads but cannot send BTC, even on develop 2026-11-16 (`wallet-send-flow.js`: EVM only) |
-| M9 | Solver + transport over the carrier; end-to-end swap on regtest/testnets | **Swap done on local chains, signed and sealed** (`crates/solver`, `scripts/swap-e2e.sh`): every step checked, lock messages signed, every message sealed to its recipient's DID. Carrier hop: blocked on the user's decision to grant the solver `elastos://peer/*` (see "M9 transport"). Not yet: the reverse direction, the capsule as the user side |
+| M9 | Solver + transport over the carrier; end-to-end swap on regtest/testnets | **Swap done over the carrier on local chains** (`crates/solver`, `CARRIER=1 scripts/swap-e2e.sh`): every message signed, sealed to its recipient's DID and sent over the dev Home's gossip after the operator approved `elastos://peer/*` in Home; user −2.05 NPT +1 ETH less gas, solver +1.95 NPT. Not yet: two separate nodes (tickets), the capsule as the user side (peer route in the fork's gateway), the reverse direction |
 
 ## Order of work
 
@@ -261,22 +261,23 @@ ChaCha20-Poly1305 with the DID as associated data; not post-quantum yet). `scrip
 runs the swap with both: user −2.05 NPT +1 ETH, solver +1.95 NPT. The harness hands the sealed
 bytes over; the carrier hop is what is left.
 
-**What the carrier hop needs (found by probing the dev Home):**
-- The gateway's local API only has `auth/attach`, `peer/get_ticket` and `health`. The full
-  Runtime API (capabilities, `POST /api/provider/peer/<op>`) is the managed runtime's
-  (`home-runtime-coords.json`): attach (`client` or `shell`), `POST /api/capability/request
-  {resource: "elastos://peer/*", action}` → pending → `POST /api/capability/grant` (shell only)
-  → token → provider calls with `Authorization`, `X-Capability-Token`, `X-Elastos-Capsule-Id`.
-- **Decision for the user:** granting the solver `elastos://peer/*` on its node is an access
-  decision. The agent did not approve its own request (a pending request from the probe in the
-  dev Home grants nothing and expires). Options: the user approves it in Home/System, or the
-  solver node's shell policy (`policy/home-auto.json`) gets an explicit rule for the solver.
-- Then: the solver joins one intents topic (`gossip_join`, or `gossip_join_exact` with tickets
-  between isolated nodes), and the capsule gets the same ops through the fork's gateway (today
-  the gateway serves six schemes; `peer` would be added for `neptune-intents`). Gossip receive
-  is a poll (`gossip_recv`). Messages go as `content` (text): the sealed bytes, base64.
-- Embedding iroh in the solver instead would tie it to the carrier's wire format
-  (`GossipMessage`, topic derivation); not chosen.
+**Carrier hop done (one node).** `solver::carrier::Carrier` attaches to the node's managed
+Runtime API (`home-runtime-coords.json`, shell scope), asks for `elastos://peer/*` with action
+`message` (the action every `peer` op maps to), and waits while Home shows the request in its
+notifications; the operator approves it there. The token is bound to that attach session, so
+one `Carrier` lives for the run and each run asks again. Then `gossip_join` on a fresh topic,
+`gossip_send` (`message` = sealed bytes in base64url, `sender_id` per party) and `gossip_recv`
+(`consumer_id` and `skip_sender_id` per party). Run: all eight steps over the carrier, same
+balances as the direct run.
+
+Notes:
+- Both parties sit on the dev Home's one node here, so messages pass through its local gossip
+  buffer, not between two nodes. Two nodes: `get_ticket` on one, `gossip_join_exact` on the other.
+- A shell session without a capability token may call `peer` ops directly (orchestrator
+  privilege for non-write ops); the solver does not use that and goes through the approval.
+- The capsule side still needs `peer` in the fork's gateway provider routes for `neptune-intents`.
+- `wallet_send` proves in the background: a provider started per call exits before it sends.
+  Fund test wallets with one long-lived provider process.
 
 ## HTLC on regtest (2026-11-16)
 

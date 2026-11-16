@@ -5,6 +5,8 @@
 # Deploys NeptuneHtlc, then runs crates/solver's swap-e2e with two provider
 # wallets that hold regtest NPT.
 #   scripts/swap-e2e.sh [user-npt-data] [solver-npt-data]
+# With CARRIER=1 every message goes over the dev Home's carrier (approve the
+# peer request in Home when it appears; it waits about 4.5 minutes).
 set -eu
 cd "$(dirname "$0")/.."
 USER_DATA="${1:-$HOME/elastos-neptune-dev/neptune-provider-data}"
@@ -16,4 +18,9 @@ cargo build -q -p solver --bin swap-e2e
 CONTRACT=$(cd contracts/htlc-evm && ~/.foundry/bin/forge create src/NeptuneHtlc.sol:NeptuneHtlc --rpc-url $RPC \
   --private-key $DEPLOYER_KEY --broadcast 2>/dev/null | awk '/Deployed to:/ {print $3}')
 echo "NeptuneHtlc at $CONTRACT"
-exec target/debug/swap-e2e "$CONTRACT" "$USER_DATA" "$SOLVER_DATA"
+if [ "${CARRIER:-}" = 1 ]; then
+  set -- "$HOME/elastos-neptune-dev/Library/Application Support/elastos/home-runtime-coords.json"
+else
+  set --
+fi
+exec target/debug/swap-e2e "$CONTRACT" "$USER_DATA" "$SOLVER_DATA" "$@"
