@@ -287,3 +287,32 @@ fn typed_amounts_convert_exactly_to_smallest_units() {
         assert!(Amount::parse_decimal(bad, 6, 1).is_err(), "{bad:?} was accepted");
     }
 }
+
+#[test]
+fn lock_messages_belong_to_one_deal_and_come_from_the_right_side() {
+    // The user (key 1) gives NPT; the solver (key 2) quotes.
+    let i = intent();
+    let q = quote_for(&i);
+    let a = accept_for(&i, &q);
+    let (quote, accept) = (decoded(&q, 2), decoded(&a, 1));
+    let note = serde_json::json!({ "hash_lock": hash_lock(), "amount": "2" });
+
+    let npt = NptLocked { v: PROTOCOL_VERSION, deal: accept.digest.clone(), note: note.clone(), from_height: 7 };
+    let got = decoded(&npt, 1);
+    got.body.answers(&got.signer, &accept, &accept.signer).unwrap();
+    let from_solver = decoded(&npt, 2);
+    assert!(from_solver.body.answers(&from_solver.signer, &accept, &accept.signer).is_err(), "only the NPT giver");
+    let other = NptLocked { deal: quote.digest.clone(), ..npt.clone() };
+    let got = decoded(&other, 1);
+    assert!(got.body.answers(&got.signer, &accept, &accept.signer).is_err(), "another deal");
+    let not_object = NptLocked { note: serde_json::json!("x"), ..npt };
+    assert!(decode::<NptLocked>(&signed(&not_object, 1), NOW, Net::Test).is_err());
+
+    let evm = EvmLocked { v: PROTOCOL_VERSION, deal: accept.digest.clone(), contract: "ab".repeat(20), id: "cd".repeat(32) };
+    let got = decoded(&evm, 2);
+    got.body.answers(&got.signer, &accept, &quote).unwrap();
+    let from_user = decoded(&evm, 1);
+    assert!(from_user.body.answers(&from_user.signer, &accept, &quote).is_err(), "only the quoting solver");
+    let bad = EvmLocked { contract: "0x".to_string() + &"ab".repeat(19), ..evm };
+    assert!(decode::<EvmLocked>(&signed(&bad, 2), NOW, Net::Test).is_err(), "contract without 0x, 40 hex");
+}

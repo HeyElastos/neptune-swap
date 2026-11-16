@@ -48,7 +48,7 @@ mod tests;
 pub use canonical::to_canonical_bytes;
 pub use did::DidKey;
 pub use error::Error;
-pub use message::{may_reveal, other_refund_at, Accept, Amount, Asset, Chain, Intent, Message, Quote, ASSETS};
+pub use message::{may_reveal, other_refund_at, Accept, Amount, Asset, Chain, EvmLocked, Intent, Message, NptLocked, Quote, ASSETS};
 pub use signed::{decode, Decoded, Net, Signed};
 
 /// The protocol version every message carries in its `v` field.

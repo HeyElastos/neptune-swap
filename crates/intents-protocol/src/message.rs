@@ -307,6 +307,85 @@ impl Message for Accept {
     }
 }
 
+/// The NPT giver's lock, sent to the NPT receiver only: the Neptune HTLC note (the lock's
+/// terms and the coin's opening data), as the wallet produced it. The receiver checks the note
+/// against the agreed terms and on its own node before it locks anything.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NptLocked {
+    pub v: u16,
+    /// Digest of the Accept that fixed the deal.
+    pub deal: String,
+    /// The HTLC note (a JSON object; light-core's `HtlcNote`).
+    pub note: serde_json::Value,
+    /// The sender's node tip before the lock: the receiver searches from here.
+    pub from_height: u64,
+}
+
+impl NptLocked {
+    /// Checks that this lock belongs to `accept` and comes from the NPT giver.
+    pub fn answers(&self, signer: &DidKey, accept: &Decoded<Accept>, npt_giver: &DidKey) -> Result<(), Error> {
+        if self.deal != accept.digest {
+            return Err(Error::invalid("deal", "not this deal's accept"));
+        }
+        if signer != npt_giver {
+            return Err(Error::invalid("signer", "not the NPT giver"));
+        }
+        Ok(())
+    }
+}
+
+impl Message for NptLocked {
+    const KIND: &'static str = "npt_locked";
+
+    fn validate(&self, _now: u64) -> Result<(), Error> {
+        check_version(self.v)?;
+        check_hex("deal", &self.deal, 64)?;
+        if !self.note.is_object() {
+            return Err(Error::invalid("note", "not an object"));
+        }
+        Ok(())
+    }
+}
+
+/// The NPT receiver's lock on the other (EVM) chain, sent to the NPT giver: where it is. The
+/// giver reads the lock's terms from the chain itself, never from this message.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvmLocked {
+    pub v: u16,
+    /// Digest of the Accept that fixed the deal.
+    pub deal: String,
+    /// The HTLC contract, 40 lowercase hex without `0x`.
+    pub contract: String,
+    /// The lock's id in that contract, 64 lowercase hex.
+    pub id: String,
+}
+
+impl EvmLocked {
+    /// Checks that this lock belongs to `accept` and comes from the quoting solver.
+    pub fn answers(&self, signer: &DidKey, accept: &Decoded<Accept>, quote: &Decoded<Quote>) -> Result<(), Error> {
+        if self.deal != accept.digest {
+            return Err(Error::invalid("deal", "not this deal's accept"));
+        }
+        if *signer != quote.signer {
+            return Err(Error::invalid("signer", "not the solver that quoted"));
+        }
+        Ok(())
+    }
+}
+
+impl Message for EvmLocked {
+    const KIND: &'static str = "evm_locked";
+
+    fn validate(&self, _now: u64) -> Result<(), Error> {
+        check_version(self.v)?;
+        check_hex("deal", &self.deal, 64)?;
+        check_hex("contract", &self.contract, 40)?;
+        check_hex("id", &self.id, 64)
+    }
+}
+
 /// When the HTLC on `chain` must refund, given the Neptune HTLC's refund time as read from
 /// its lock script (never from a message) and the quoted duration. Errs when less than the
 /// chain's minimum lock remains: then the NPT receiver does not lock.
