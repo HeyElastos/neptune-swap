@@ -12,7 +12,7 @@ index f96bcf74..3b71342f 100755
  
  /// Reserved names for provider targets that only Runtime invocation can reach.
 diff --git a/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs b/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs
-index 471b56d0..b5fc204f 100644
+index 471b56d0..ade3ca50 100644
 --- a/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs
 +++ b/elastos/crates/elastos-server/src/api/gateway_browser_wallet.rs
 @@ -59,7 +59,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_bridge(
@@ -24,7 +24,7 @@ index 471b56d0..b5fc204f 100644
              Ok(authority) => authority,
              Err(err) => {
                  return browser_wallet_cors_response(
-@@ -159,6 +159,11 @@ pub(in crate::api::gateway) struct BrowserWalletApprovalStatusQuery {
+@@ -159,6 +159,23 @@ pub(in crate::api::gateway) struct BrowserWalletApprovalStatusQuery {
  
  const BROWSER_ACCOUNT_ACCESS_TTL_SECS: u64 = 12 * 60 * 60;
  
@@ -33,11 +33,27 @@ index 471b56d0..b5fc204f 100644
 +/// is the launch token's actor), so one app cannot read or finish another's.
 +const WALLET_BRIDGE_APPS: &[&str] = &[BROWSER_CAPSULE_ID, "neptune-swap"];
 +
++/// Local Neptune development fork: the page and origin an app other than the
++/// Browser is known by in Wallet. The Browser reports the page it shows; any
++/// other app is named by the gateway, never by itself, so a page cannot pass
++/// itself off as some website in a Wallet prompt.
++fn pinned_app_page(authority: &RuntimeWalletAuthority) -> Option<(String, String)> {
++    let actor = authority.verified_context().actor();
++    (actor != BROWSER_CAPSULE_ID).then(|| {
++        let origin = format!("https://{actor}.app.elastos");
++        (format!("{origin}/"), origin)
++    })
++}
++
  fn validate_browser_wallet_page_origin(
      page_url: &str,
      origin: &str,
-@@ -202,7 +207,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_signature(
-     Json(input): Json<BrowserWalletSignatureRequest>,
+@@ -199,10 +216,10 @@ fn validate_browser_wallet_page_origin(
+ pub(in crate::api::gateway) async fn browser_app_wallet_request_signature(
+     State(state): State<GatewayState>,
+     headers: HeaderMap,
+-    Json(input): Json<BrowserWalletSignatureRequest>,
++    Json(mut input): Json<BrowserWalletSignatureRequest>,
  ) -> Response {
      let authority =
 -        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
@@ -45,8 +61,23 @@ index 471b56d0..b5fc204f 100644
              Ok(authority) => authority,
              Err(err) => {
                  return browser_wallet_cors_response(
-@@ -226,7 +231,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_accounts(
-     Json(input): Json<BrowserWalletAccountAccessRequest>,
+@@ -211,6 +228,10 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_signature(
+                 );
+             }
+         };
++    if let Some((page_url, origin)) = pinned_app_page(&authority) {
++        input.page_url = page_url;
++        input.origin = Some(origin);
++    }
+     let context = authority.home_launch_context();
+     let response =
+         match create_browser_wallet_signature_request(&state, &context, &authority, input).await {
+@@ -223,10 +244,10 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_signature(
+ pub(in crate::api::gateway) async fn browser_app_wallet_request_accounts(
+     State(state): State<GatewayState>,
+     headers: HeaderMap,
+-    Json(input): Json<BrowserWalletAccountAccessRequest>,
++    Json(mut input): Json<BrowserWalletAccountAccessRequest>,
  ) -> Response {
      let authority =
 -        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
@@ -54,8 +85,23 @@ index 471b56d0..b5fc204f 100644
              Ok(authority) => authority,
              Err(err) => {
                  return browser_wallet_cors_response(
-@@ -249,7 +254,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_transaction(
-     Json(input): Json<BrowserWalletTransactionRequest>,
+@@ -235,6 +256,10 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_accounts(
+                 );
+             }
+         };
++    if let Some((page_url, origin)) = pinned_app_page(&authority) {
++        input.page_url = page_url;
++        input.origin = origin;
++    }
+     let response =
+         match create_browser_wallet_account_access_request(&state, &authority, input).await {
+             Ok(payload) => Json(payload).into_response(),
+@@ -246,10 +271,10 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_accounts(
+ pub(in crate::api::gateway) async fn browser_app_wallet_request_transaction(
+     State(state): State<GatewayState>,
+     headers: HeaderMap,
+-    Json(input): Json<BrowserWalletTransactionRequest>,
++    Json(mut input): Json<BrowserWalletTransactionRequest>,
  ) -> Response {
      let authority =
 -        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
@@ -63,8 +109,23 @@ index 471b56d0..b5fc204f 100644
              Ok(authority) => authority,
              Err(err) => {
                  return browser_wallet_cors_response(
-@@ -276,7 +281,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_read(
-     Json(input): Json<BrowserWalletReadRequest>,
+@@ -258,6 +283,10 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_transaction(
+                 );
+             }
+         };
++    if let Some((page_url, origin)) = pinned_app_page(&authority) {
++        input.page_url = page_url;
++        input.origin = Some(origin);
++    }
+     let context = authority.home_launch_context();
+     let response = match create_browser_wallet_transaction_request(
+         &state, &context, &authority, input,
+@@ -273,10 +302,10 @@ pub(in crate::api::gateway) async fn browser_app_wallet_request_transaction(
+ pub(in crate::api::gateway) async fn browser_app_wallet_read(
+     State(state): State<GatewayState>,
+     headers: HeaderMap,
+-    Json(input): Json<BrowserWalletReadRequest>,
++    Json(mut input): Json<BrowserWalletReadRequest>,
  ) -> Response {
      let authority =
 -        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
@@ -72,7 +133,18 @@ index 471b56d0..b5fc204f 100644
              Ok(authority) => authority,
              Err(err) => {
                  return browser_wallet_cors_response(
-@@ -299,7 +304,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_broadcast_transaction(
+@@ -285,6 +314,10 @@ pub(in crate::api::gateway) async fn browser_app_wallet_read(
+                 );
+             }
+         };
++    if let Some((page_url, origin)) = pinned_app_page(&authority) {
++        input.page_url = page_url;
++        input.origin = Some(origin);
++    }
+     let context = authority.home_launch_context();
+     let response = match browser_wallet_read(&state, &context, &authority, input).await {
+         Ok(payload) => Json(payload).into_response(),
+@@ -299,7 +332,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_broadcast_transaction(
      Json(input): Json<BrowserWalletBroadcastRequest>,
  ) -> Response {
      let authority =
@@ -81,8 +153,12 @@ index 471b56d0..b5fc204f 100644
              Ok(authority) => authority,
              Err(err) => {
                  return browser_wallet_cors_response(
-@@ -333,7 +338,7 @@ pub(in crate::api::gateway) async fn browser_app_wallet_approval_status(
-     Query(query): Query<BrowserWalletApprovalStatusQuery>,
+@@ -330,10 +363,10 @@ pub(in crate::api::gateway) async fn browser_app_wallet_approval_status(
+     State(state): State<GatewayState>,
+     headers: HeaderMap,
+     Path(request_id): Path<String>,
+-    Query(query): Query<BrowserWalletApprovalStatusQuery>,
++    Query(mut query): Query<BrowserWalletApprovalStatusQuery>,
  ) -> Response {
      let authority =
 -        match require_runtime_wallet_authority(&state.data_dir, &headers, &[BROWSER_CAPSULE_ID]) {
@@ -90,7 +166,18 @@ index 471b56d0..b5fc204f 100644
              Ok(authority) => authority,
              Err(err) => {
                  return browser_wallet_cors_response(
-@@ -975,7 +980,7 @@ fn bind_completed_browser_signature_caller(
+@@ -342,6 +375,10 @@ pub(in crate::api::gateway) async fn browser_app_wallet_approval_status(
+                 );
+             }
+         };
++    if let Some((page_url, origin)) = pinned_app_page(&authority) {
++        query.page_url = Some(page_url);
++        query.origin = Some(origin);
++    }
+     if !is_safe_runtime_id(&request_id) {
+         return browser_wallet_cors_response(
+             &headers,
+@@ -975,7 +1012,7 @@ fn bind_completed_browser_signature_caller(
          ("principal_id", context.principal_id()),
          ("session_id", context.session_id()),
          ("launch_id", context.launch_id()),
@@ -99,7 +186,7 @@ index 471b56d0..b5fc204f 100644
      ] {
          if request.get(field).and_then(|value| value.as_str()) != Some(expected) {
              return Err((
-@@ -1036,7 +1041,7 @@ fn browser_account_access_request_payload<'a>(
+@@ -1036,7 +1073,7 @@ fn browser_account_access_request_payload<'a>(
          ("principal_id", context.principal_id()),
          ("session_id", context.session_id()),
          ("launch_id", context.launch_id()),
@@ -108,7 +195,7 @@ index 471b56d0..b5fc204f 100644
      ] {
          if request.get(field).and_then(|value| value.as_str()) != Some(expected) {
              return Err((
-@@ -1283,7 +1288,7 @@ async fn browser_wallet_approval_status(
+@@ -1283,7 +1320,7 @@ async fn browser_wallet_approval_status(
                      .get("requested_by_actor")
                      .or_else(|| request.get("capsule_id"))
                      .and_then(|value| value.as_str())
@@ -118,10 +205,10 @@ index 471b56d0..b5fc204f 100644
          .ok_or_else(|| {
              (
 diff --git a/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs b/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
-index c6742ea3..4573d88e 100644
+index c6742ea3..cba0b498 100644
 --- a/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
 +++ b/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
-@@ -1602,6 +1602,162 @@ pub(super) async fn gateway_library_events_stream(
+@@ -1602,6 +1602,197 @@ pub(super) async fn gateway_library_events_stream(
      response
  }
  
@@ -130,6 +217,11 @@ index c6742ea3..4573d88e 100644
 +/// Local Neptune development fork: the carrier topics neptune-swap may use.
 +const NEPTUNE_SWAP_TOPIC_PREFIX: &str = "neptune-swap";
 +const NEPTUNE_SWAP_MESSAGE_MAX_BYTES: usize = 64 * 1024;
++/// Topics one launch of the app may have joined at once.
++const NEPTUNE_SWAP_TOPICS_PER_LAUNCH: usize = 4;
++static NEPTUNE_SWAP_JOINED: std::sync::Mutex<
++    std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
++> = std::sync::Mutex::new(std::collections::BTreeMap::new());
 +
 +/// Local Neptune development fork: `neptune/prices` asks public price sources
 +/// (they see this computer's address), so the user approves it in Home first,
@@ -137,53 +229,71 @@ index c6742ea3..4573d88e 100644
 +const NEPTUNE_PRICES_RESOURCE: &str = "elastos://neptune/prices";
 +const NEPTUNE_PRICES_REASON: &str = "Neptune Swap wants to show prices in USD. It asks CoinGecko and Kraken, which see this computer's address and when it asks, never what you swap.";
 +
++/// One user's answer: granted until, refused until, or a request still open
++/// (with the attach token that made it, so it is polled, never asked again).
 +#[derive(Default)]
 +struct NeptunePriceApproval {
-+    granted: bool,
-+    /// The open request and the attach token that made it.
++    granted_until: u64,
++    denied_until: u64,
 +    pending: Option<(String, String)>,
 +}
 +
-+static NEPTUNE_PRICE_APPROVAL: std::sync::OnceLock<tokio::sync::Mutex<NeptunePriceApproval>> =
-+    std::sync::OnceLock::new();
++/// How long a yes lasts, and how long a no stops the app from asking again.
++const NEPTUNE_PRICES_GRANT_SECS: u64 = 12 * 3600;
++const NEPTUNE_PRICES_DENIED_SECS: u64 = 10 * 60;
++
++static NEPTUNE_PRICE_APPROVALS: std::sync::OnceLock<
++    tokio::sync::Mutex<std::collections::HashMap<String, NeptunePriceApproval>>,
++> = std::sync::OnceLock::new();
 +
 +fn neptune_price_reply(status: StatusCode, code: &str, message: &str) -> Response {
 +    (status, Json(serde_json::json!({ "status": "error", "code": code, "message": message }))).into_response()
 +}
 +
-+/// Ok once the user has approved; otherwise the reply to send: 202 with
-+/// `approval_pending` while Home asks, 403 `approval_denied` after a no (the
-+/// next call asks again).
-+async fn neptune_price_approval(data_dir: &std::path::Path) -> Result<(), Response> {
-+    let mut approval = NEPTUNE_PRICE_APPROVAL.get_or_init(Default::default).lock().await;
-+    if approval.granted {
++/// Ok once this user (`principal_id`) has approved; otherwise the reply to
++/// send: 202 `approval_pending` while Home asks, 403 `approval_denied` after
++/// a no (for ten minutes, without asking again). One request at a time per
++/// user; a poll that fails leaves it pending; every call has a timeout.
++async fn neptune_price_approval(data_dir: &std::path::Path, principal_id: &str) -> Result<(), Response> {
++    let now = crate::auth::now_ts();
++    let mut approvals = NEPTUNE_PRICE_APPROVALS.get_or_init(Default::default).lock().await;
++    if approvals.len() > 1024 {
++        approvals.retain(|_, a| a.granted_until > now || a.denied_until > now || a.pending.is_some());
++    }
++    let approval = approvals.entry(principal_id.to_string()).or_default();
++    if approval.granted_until > now {
 +        return Ok(());
++    }
++    let pending_reply = || neptune_price_reply(StatusCode::ACCEPTED, "approval_pending", "Approve showing USD prices in Home.");
++    if approval.denied_until > now {
++        return Err(neptune_price_reply(StatusCode::FORBIDDEN, "approval_denied", "USD prices were not approved."));
 +    }
 +    let unavailable =
 +        |message: String| neptune_price_reply(StatusCode::SERVICE_UNAVAILABLE, "approval_unavailable", &message);
 +    let coords = load_live_runtime_coords(data_dir)
 +        .await
 +        .ok_or_else(|| unavailable("the Home runtime is not running".into()))?;
-+    let client = reqwest::Client::new();
++    let client = reqwest::Client::builder()
++        .timeout(std::time::Duration::from_secs(10))
++        .build()
++        .map_err(|e| unavailable(e.to_string()))?;
 +    let api = coords.api_url.trim_end_matches('/').to_string();
-+    let mut status = serde_json::Value::Null;
-+    if let Some((id, token)) = approval.pending.clone() {
-+        let polled = client
-+            .get(format!("{api}/api/capability/request/{id}"))
-+            .bearer_auth(&token)
-+            .send()
-+            .await
-+            .ok()
-+            .filter(|r| r.status().is_success());
-+        if let Some(reply) = polled {
-+            status = reply.json().await.unwrap_or_default();
++    let status: serde_json::Value = if let Some((id, token)) = approval.pending.clone() {
++        match client.get(format!("{api}/api/capability/request/{id}")).bearer_auth(&token).send().await {
++            Ok(reply) if reply.status() == reqwest::StatusCode::NOT_FOUND => {
++                // The runtime no longer knows it (expired, restarted): ask anew next time.
++                approval.pending = None;
++                return Err(pending_reply());
++            }
++            Ok(reply) if reply.status().is_success() => reply.json().await.unwrap_or_default(),
++            // Any other failure: still pending, never a new request.
++            _ => return Err(pending_reply()),
 +        }
-+    }
-+    if status.is_null() {
++    } else {
 +        let token = gateway_attach_runtime_token(&client, &api, &coords.attach_secret, "client")
 +            .await
 +            .map_err(|e| unavailable(e.to_string()))?;
-+        status = client
++        let asked: serde_json::Value = client
 +            .post(format!("{api}/api/capability/request"))
 +            .bearer_auth(&token)
 +            .json(&serde_json::json!({
@@ -195,28 +305,22 @@ index c6742ea3..4573d88e 100644
 +            .json()
 +            .await
 +            .map_err(|e| unavailable(e.to_string()))?;
-+        if let Some(id) = status["request_id"].as_str() {
++        if let Some(id) = asked["request_id"].as_str() {
 +            approval.pending = Some((id.to_string(), token));
 +        }
-+    }
++        asked
++    };
++    let granted = status["token"].is_string() || status["status"] == "granted";
 +    match status["status"].as_str() {
-+        _ if status["token"].is_string() => {
-+            approval.granted = true;
++        _ if granted => {
++            approval.granted_until = now + NEPTUNE_PRICES_GRANT_SECS;
 +            approval.pending = None;
 +            Ok(())
 +        }
-+        Some("granted") => {
-+            approval.granted = true;
-+            approval.pending = None;
-+            Ok(())
-+        }
-+        Some("pending") => Err(neptune_price_reply(
-+            StatusCode::ACCEPTED,
-+            "approval_pending",
-+            "Approve showing USD prices in Home.",
-+        )),
++        Some("pending") => Err(pending_reply()),
 +        other => {
 +            approval.pending = None;
++            approval.denied_until = now + NEPTUNE_PRICES_DENIED_SECS;
 +            Err(neptune_price_reply(
 +                StatusCode::FORBIDDEN,
 +                "approval_denied",
@@ -227,53 +331,71 @@ index c6742ea3..4573d88e 100644
 +}
 +
 +/// Local Neptune development fork: the `peer` request neptune-swap may make,
-+/// rebuilt from its body. Only its own topics; the sender and receive cursor
-+/// are the gateway's, derived from the launch session (never the session id
-+/// itself, which stays off the network), so the capsule cannot speak or read
-+/// as anyone else. Gossip timestamps, nonces and signatures are the
-+/// provider's; the swap messages carry their own signatures.
++/// rebuilt from its body. Only its own topics (`neptune-swap`, or under
++/// `neptune-swap/` or `neptune-swap-`), at most `NEPTUNE_SWAP_TOPICS_PER_LAUNCH`
++/// joined per launch; the sender and receive cursor are the gateway's, derived
++/// from the launch and the topic (never the launch id itself, which stays off
++/// the network, and a different id on every topic), so the capsule cannot
++/// speak or read as anyone else and its messages on different topics do not
++/// link. Gossip timestamps, nonces and signatures are the provider's; the swap
++/// messages carry their own signatures.
 +fn neptune_swap_peer_request(
 +    op: &str,
 +    body: &serde_json::Value,
-+    session_id: &str,
++    launch_id: &str,
 +) -> Result<serde_json::Value, String> {
 +    let topic = || -> Result<String, String> {
 +        let topic = body.get("topic").and_then(serde_json::Value::as_str).unwrap_or_default();
-+        let ok = topic.starts_with(NEPTUNE_SWAP_TOPIC_PREFIX)
++        let ours = topic == NEPTUNE_SWAP_TOPIC_PREFIX
++            || topic.strip_prefix(NEPTUNE_SWAP_TOPIC_PREFIX).is_some_and(|rest| rest.starts_with('/') || rest.starts_with('-'));
++        let ok = ours
 +            && topic.len() <= 128
 +            && topic.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_./".contains(&b));
-+        ok.then(|| topic.to_string())
-+            .ok_or_else(|| format!("topic must start with {NEPTUNE_SWAP_TOPIC_PREFIX} (a-z, 0-9, -_./, at most 128)"))
++        ok.then(|| topic.to_string()).ok_or_else(|| {
++            format!("topic must be {NEPTUNE_SWAP_TOPIC_PREFIX} or under {NEPTUNE_SWAP_TOPIC_PREFIX}/ or {NEPTUNE_SWAP_TOPIC_PREFIX}- (a-z, 0-9, -_./, at most 128)")
++        })
 +    };
-+    let party = format!(
-+        "neptune-swap:{}",
-+        &hex::encode(sha2::Sha256::digest(format!("neptune-swap/peer/{session_id}")))[..16]
-+    );
++    let party = |topic: &str| {
++        format!(
++            "neptune-swap:{}",
++            &hex::encode(sha2::Sha256::digest(format!("neptune-swap/peer/{launch_id}/{topic}")))[..16]
++        )
++    };
 +    Ok(match op {
-+        "get_ticket" => serde_json::json!({ "op": op }),
-+        "gossip_join" | "gossip_leave" => serde_json::json!({ "op": op, "topic": topic()? }),
-+        "gossip_join_exact" => {
-+            let peers = body.get("peers").cloned().unwrap_or_else(|| serde_json::json!([]));
-+            let valid = peers.as_array().is_some_and(|p| p.len() <= 16 && p.iter().all(serde_json::Value::is_string));
-+            if !valid {
-+                return Err("peers must be at most 16 endpoint ids".into());
++        "gossip_join" | "gossip_leave" => {
++            let topic = topic()?;
++            let mut joined = NEPTUNE_SWAP_JOINED.lock().map_err(|_| "topic bookkeeping failed".to_string())?;
++            if joined.len() > 4096 {
++                joined.clear();
 +            }
-+            serde_json::json!({ "op": op, "topic": topic()?, "peers": peers })
++            let mine = joined.entry(launch_id.to_string()).or_default();
++            if op == "gossip_join" {
++                if !mine.contains(&topic) && mine.len() >= NEPTUNE_SWAP_TOPICS_PER_LAUNCH {
++                    return Err(format!("at most {NEPTUNE_SWAP_TOPICS_PER_LAUNCH} topics at once; leave one first"));
++                }
++                mine.insert(topic.clone());
++            } else {
++                mine.remove(&topic);
++            }
++            serde_json::json!({ "op": op, "topic": topic })
 +        }
 +        "gossip_send" => {
 +            let message = body.get("message").and_then(serde_json::Value::as_str).unwrap_or_default();
 +            if message.is_empty() || message.len() > NEPTUNE_SWAP_MESSAGE_MAX_BYTES {
 +                return Err(format!("message must be 1 to {NEPTUNE_SWAP_MESSAGE_MAX_BYTES} bytes"));
 +            }
++            let topic = topic()?;
 +            serde_json::json!({
-+                "op": op, "topic": topic()?, "message": message,
-+                "sender": NEPTUNE_SWAP_CAPSULE_ID, "sender_id": party,
++                "op": op, "topic": topic, "message": message,
++                "sender": NEPTUNE_SWAP_CAPSULE_ID, "sender_id": party(&topic),
 +            })
 +        }
 +        "gossip_recv" => {
 +            let limit = body.get("limit").and_then(serde_json::Value::as_u64).unwrap_or(50).clamp(1, 50);
++            let topic = topic()?;
++            let party = party(&topic);
 +            serde_json::json!({
-+                "op": op, "topic": topic()?, "limit": limit,
++                "op": op, "topic": topic, "limit": limit,
 +                "consumer_id": party, "skip_sender_id": party,
 +            })
 +        }
@@ -284,7 +406,7 @@ index c6742ea3..4573d88e 100644
  pub(super) async fn gateway_provider_proxy(
      State(state): State<GatewayState>,
      Path((scheme, op)): Path<(String, String)>,
-@@ -1702,6 +1858,34 @@ pub(super) async fn gateway_provider_proxy(
+@@ -1702,6 +1893,33 @@ pub(super) async fn gateway_provider_proxy(
                      .into_response()
              }
          },
@@ -306,8 +428,7 @@ index c6742ea3..4573d88e 100644
 +        // Local Neptune development fork: neptune-swap speaks on its own
 +        // carrier topics (requests rebuilt by neptune_swap_peer_request).
 +        "peer" => match op.as_str() {
-+            "get_ticket" | "gossip_join" | "gossip_join_exact" | "gossip_leave" | "gossip_send"
-+            | "gossip_recv" => &[NEPTUNE_SWAP_CAPSULE_ID],
++            "gossip_join" | "gossip_leave" | "gossip_send" | "gossip_recv" => &[NEPTUNE_SWAP_CAPSULE_ID],
 +            _ => {
 +                return (
 +                    StatusCode::NOT_FOUND,
@@ -319,31 +440,31 @@ index c6742ea3..4573d88e 100644
          _ => return (StatusCode::NOT_FOUND, "Gateway provider not found").into_response(),
      };
      let required = match require_home_launch_token_binding(&state.data_dir, &headers, allowed_apps)
-@@ -1727,6 +1911,11 @@ pub(super) async fn gateway_provider_proxy(
+@@ -1727,6 +1945,11 @@ pub(super) async fn gateway_provider_proxy(
      /* The verified capsule behind the launch token: model runs are bound and
      audited to it, never to a fixed name. */
      let launch_capsule_id = required.launch_context.executable_actor.clone();
 +    if scheme == "neptune" && op == "prices" {
-+        if let Err(response) = neptune_price_approval(&state.data_dir).await {
++        if let Err(response) = neptune_price_approval(&state.data_dir, &context.principal_id).await {
 +            return response;
 +        }
 +    }
      if scheme == "net" && matches!(op.as_str(), "http" | "connect" | "resolve" | "stream") {
          return (
              StatusCode::GONE,
-@@ -1839,6 +2028,11 @@ pub(super) async fn gateway_provider_proxy(
+@@ -1839,6 +2062,11 @@ pub(super) async fn gateway_provider_proxy(
                  }
              }
          }
 +    } else if scheme == "peer" {
-+        request = match neptune_swap_peer_request(&op, &request, &session_id) {
++        request = match neptune_swap_peer_request(&op, &request, &required.launch_id) {
 +            Ok(value) => value,
 +            Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
 +        };
      } else {
          request["op"] = serde_json::Value::String(op.clone());
      }
-@@ -4647,3 +4841,45 @@ mod tests {
+@@ -4647,3 +4875,61 @@ mod tests {
          }
      }
  }
@@ -356,10 +477,25 @@ index c6742ea3..4573d88e 100644
 +    #[test]
 +    fn only_its_own_topics() {
 +        assert!(req("gossip_join", &json!({"topic": "neptune-swap/test"}), "s").is_ok());
-+        for topic in ["chat", "home-services-requests", "neptune-swapX", "neptune-swap/A", ""] {
++        assert!(req("gossip_join", &json!({"topic": "neptune-swap-dev-0a"}), "s").is_ok());
++        for topic in ["chat", "home-services-requests", "neptune-swapX", "neptune-swapper/x", "neptune-swap/A", ""] {
 +            assert!(req("gossip_join", &json!({ "topic": topic }), "s").is_err(), "{topic}");
 +        }
-+        assert!(req("connect", &json!({"topic": "neptune-swap"}), "s").is_err());
++        for op in ["connect", "get_ticket", "gossip_join_exact"] {
++            assert!(req(op, &json!({"topic": "neptune-swap"}), "s").is_err(), "{op}");
++        }
++    }
++
++    #[test]
++    fn a_launch_joins_a_few_topics_at_most() {
++        for i in 0..super::NEPTUNE_SWAP_TOPICS_PER_LAUNCH {
++            assert!(req("gossip_join", &json!({ "topic": format!("neptune-swap/t{i}") }), "many").is_ok());
++        }
++        assert!(req("gossip_join", &json!({"topic": "neptune-swap/one-more"}), "many").is_err());
++        assert!(req("gossip_join", &json!({"topic": "neptune-swap/t0"}), "many").is_ok(), "already joined");
++        assert!(req("gossip_leave", &json!({"topic": "neptune-swap/t0"}), "many").is_ok());
++        assert!(req("gossip_join", &json!({"topic": "neptune-swap/one-more"}), "many").is_ok());
++        assert!(req("gossip_join", &json!({"topic": "neptune-swap/t9"}), "other-launch").is_ok());
 +    }
 +
 +    #[test]
@@ -378,6 +514,9 @@ index c6742ea3..4573d88e 100644
 +        assert_eq!(recv["limit"], 50);
 +        let other = req("gossip_recv", &json!({"topic": "neptune-swap"}), "session-b").unwrap();
 +        assert_ne!(other["consumer_id"].as_str(), Some(party));
++        // Another topic, another sender id: nothing links the two.
++        let elsewhere = req("gossip_recv", &json!({"topic": "neptune-swap/offers/main"}), "session-a").unwrap();
++        assert_ne!(elsewhere["consumer_id"].as_str(), Some(party));
 +    }
 +
 +    #[test]
@@ -385,8 +524,6 @@ index c6742ea3..4573d88e 100644
 +        let big = "a".repeat(64 * 1024 + 1);
 +        assert!(req("gossip_send", &json!({"topic": "neptune-swap", "message": big}), "s").is_err());
 +        assert!(req("gossip_send", &json!({"topic": "neptune-swap", "message": ""}), "s").is_err());
-+        let peers: Vec<String> = (0..17).map(|i| i.to_string()).collect();
-+        assert!(req("gossip_join_exact", &json!({"topic": "neptune-swap", "peers": peers}), "s").is_err());
 +    }
 +}
 diff --git a/elastos/crates/elastos-server/src/server_infra.rs b/elastos/crates/elastos-server/src/server_infra.rs

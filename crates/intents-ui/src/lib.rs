@@ -247,6 +247,7 @@ fn show_usd(app: &AppWindow, prices: Option<&Value>) {
         prices,
         (symbol(app.get_give_index()), &app.get_give_amount()),
         (symbol(app.get_want_index()), &app.get_want_amount()),
+        runtime::now_secs(),
     );
     app.set_give_usd(lines.give.into());
     app.set_want_usd(lines.want.into());

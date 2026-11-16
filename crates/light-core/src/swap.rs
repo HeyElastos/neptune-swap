@@ -155,13 +155,13 @@ impl LightWallet {
         refund_after_ms: u64,
         claim_lock: Digest,
         refund_index: u64,
-        snapshot: RpcMsMembershipSnapshot,
+        basis: crate::send::SpendBasis,
         now_ms: u64,
     ) -> Result<(TransactionDetails, HtlcNote)> {
         let htlc = Htlc { hash_lock, refund_after: refund_after_ms, claim_lock, refund_lock: self.swap_lock(refund_index) };
         let utxo = Utxo::new_native_currency(htlc.program().hash(), plan.amount);
         let receiver_preimage: Digest = rand::random();
-        let height = BlockHeight::from(snapshot.synced_height);
+        let height = BlockHeight::from(basis.height);
         let sender_randomness = self.entropy.generate_sender_randomness(height, receiver_preimage.hash());
         let note = HtlcNote {
             hash_lock: hex(&hash_lock),
@@ -175,7 +175,6 @@ impl LightWallet {
         };
         // No on-chain notification: the note goes to the counterparty directly.
         let output = TxOutput::no_notification_as_change(utxo, sender_randomness, receiver_preimage.hash());
-        let basis = self.node_basis(plan, snapshot)?;
         let (details, _) = self.build_spend(plan, basis, output, now_ms)?;
         Ok((details, note))
     }

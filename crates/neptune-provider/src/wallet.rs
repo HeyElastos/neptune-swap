@@ -51,11 +51,18 @@ struct Job {
 pub struct Wallets {
     root: Option<PathBuf>,
     jobs: std::sync::Mutex<std::collections::HashMap<String, Job>>,
+    /// When offers were signed (Unix seconds): a page cannot spend the
+    /// solver's name on a flood of offers.
+    offers_signed: std::sync::Mutex<Vec<u64>>,
 }
+
+/// Offer signatures per hour: five offers republished every ten minutes
+/// need 30; withdrawals and new terms fit in the rest.
+const OFFER_SIGNS_PER_HOUR: usize = 60;
 
 impl Wallets {
     pub fn new(root: Option<PathBuf>) -> Self {
-        Self { root, jobs: Default::default() }
+        Self { root, jobs: Default::default(), offers_signed: Default::default() }
     }
 
     fn dir(&self, network_id: &str) -> Result<PathBuf> {
@@ -289,6 +296,14 @@ impl Wallets {
         use base64::Engine as _;
         use intents_protocol::Message as _;
         offer.validate(now_secs).map_err(|e| anyhow::anyhow!("not a valid offer: {e}"))?;
+        {
+            let mut signed = self.offers_signed.lock().map_err(|_| anyhow::anyhow!("offers lock"))?;
+            signed.retain(|at| at + 3600 > now_secs);
+            if signed.len() >= OFFER_SIGNS_PER_HOUR {
+                bail!("too many offers signed in the last hour; wait a little");
+            }
+            signed.push(now_secs);
+        }
         let wallet = self.load(network_id, network)?.context("no wallet")?;
         let key = ed25519_dalek::SigningKey::from_bytes(&wallet.solver_key_seed());
         let net = if network == Network::Main { intents_protocol::Net::Main } else { intents_protocol::Net::Test };
@@ -563,6 +578,12 @@ mod tests {
         assert_eq!(decoded.body, offer);
         // An invalid or expired offer is not signed.
         assert!(wallets.offer_sign("neptune-main", Network::Main, &offer, now + 3600).is_err());
+        // Nor more than the hourly budget.
+        for _ in 1..OFFER_SIGNS_PER_HOUR {
+            wallets.offer_sign("neptune-main", Network::Main, &offer, now).unwrap();
+        }
+        assert!(wallets.offer_sign("neptune-main", Network::Main, &offer, now).is_err());
+        assert!(wallets.offer_sign("neptune-main", Network::Main, &offer, now + 3601).is_err(), "expired offer");
         let _ = std::fs::remove_dir_all(root);
     }
 

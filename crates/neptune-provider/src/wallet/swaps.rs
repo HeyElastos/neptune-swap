@@ -128,9 +128,15 @@ impl Wallets {
         let mut wallet = self.load(network_id, network)?.context("no wallet")?;
         let tip = catch_up(&mut wallet, node)?;
         let plan = wallet.plan_spend(amount, fee, now_ms)?;
-        let snapshot = rpc::parse_membership_snapshot(
-            &node.call(rpc::restore_membership_proof_request(plan.index_sets.clone()))?,
-        )?;
+        // The wallet's own membership proofs when it has them: the node then
+        // does not learn which coins fund the lock.
+        let basis = match wallet.own_basis(&plan) {
+            Some(own) => own,
+            None => wallet.node_basis(
+                &plan,
+                rpc::parse_membership_snapshot(&node.call(rpc::restore_membership_proof_request(plan.index_sets.clone()))?)?,
+            )?,
+        };
         let mut book = self.book(network_id)?;
         let refund_index = self.take_index(network_id, &mut book)?;
         let (secret, hash_lock) = match prepared {
@@ -141,7 +147,7 @@ impl Wallets {
             }
         };
         let (details, note) =
-            wallet.build_htlc_lock(&plan, hash_lock, refund_after_ms, claim_lock, refund_index, snapshot, now_ms)?;
+            wallet.build_htlc_lock(&plan, hash_lock, refund_after_ms, claim_lock, refund_index, basis, now_ms)?;
         // Keep the secret before anything is sent: a lock whose secret was
         // lost could only be refunded.
         let id = hex(&hash_lock)[..16].to_string();

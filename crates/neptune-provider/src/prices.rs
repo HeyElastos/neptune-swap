@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-const TIMEOUT: Duration = Duration::from_secs(8);
+/// Each source gets this long; both are asked at once, so the provider
+/// (one request at a time) waits at most this.
+const TIMEOUT: Duration = Duration::from_secs(4);
 const CACHE: Duration = Duration::from_secs(60);
 /// Two sources further apart than this (percent) are shown as disagreeing.
 const DISAGREE_PCT: f64 = 2.0;
@@ -29,25 +31,30 @@ pub const KRAKEN: &str = "https://api.kraken.com/0/public/Ticker?pair=XBTUSD,ETH
 
 #[derive(Default)]
 pub struct Prices {
-    cached: Option<(Instant, Value)>,
+    /// The last answer, success or failure, for a minute: a slow or dead
+    /// source is not asked again on every call.
+    cached: Option<(Instant, Result<Value, String>)>,
 }
 
 impl Prices {
-    /// The current prices, from the cache when it is fresh.
-    pub fn get(&mut self, fetch: impl Fn(&str) -> Result<Value, String>) -> Result<Value, String> {
-        if let Some((at, value)) = &self.cached {
+    /// The current prices, from the cache when it is fresh. Both sources are
+    /// asked at once.
+    pub fn get(&mut self, fetch: impl Fn(&str) -> Result<Value, String> + Send + Sync + Copy + 'static) -> Result<Value, String> {
+        if let Some((at, answer)) = &self.cached {
             if at.elapsed() < CACHE {
-                return Ok(value.clone());
+                return answer.clone();
             }
         }
-        let gecko = fetch(COINGECKO);
-        let kraken = fetch(KRAKEN);
-        if let (Err(a), Err(b)) = (&gecko, &kraken) {
-            return Err(format!("no price source answered (CoinGecko: {a}; Kraken: {b})"));
-        }
-        let value = combine(gecko.ok().as_ref().map(coingecko), kraken.ok().as_ref().map(kraken_prices), now_secs());
-        self.cached = Some((Instant::now(), value.clone()));
-        Ok(value)
+        let gecko = std::thread::spawn(move || fetch(COINGECKO));
+        let kraken = std::thread::spawn(move || fetch(KRAKEN));
+        let gecko = gecko.join().unwrap_or_else(|_| Err("failed".into()));
+        let kraken = kraken.join().unwrap_or_else(|_| Err("failed".into()));
+        let answer = match (&gecko, &kraken) {
+            (Err(a), Err(b)) => Err(format!("no price source answered (CoinGecko: {a}; Kraken: {b})")),
+            _ => Ok(combine(gecko.ok().as_ref().map(coingecko), kraken.ok().as_ref().map(kraken_prices), now_secs())),
+        };
+        self.cached = Some((Instant::now(), answer.clone()));
+        answer
     }
 }
 
@@ -170,15 +177,24 @@ mod tests {
     fn junk_is_ignored_and_the_cache_holds() {
         let v = combine(Some(coingecko(&json!({"bitcoin":{"usd":-1}}))), Some(kraken_prices(&json!({"error":["EGeneral"]}))), 1);
         assert_eq!(v["prices"], json!({}));
-        let calls = std::cell::Cell::new(0);
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let mut prices = Prices::default();
-        let fetch = |url: &str| {
-            calls.set(calls.get() + 1);
+        fn fetch(url: &str) -> Result<Value, String> {
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(if url == COINGECKO { gecko() } else { kraken() })
-        };
+        }
         prices.get(fetch).unwrap();
         prices.get(fetch).unwrap();
-        assert_eq!(calls.get(), 2, "one fetch per source, then the cache");
-        assert_eq!(Prices::default().get(|_| Err("offline".into())).unwrap_err().contains("no price source"), true);
+        assert_eq!(CALLS.load(std::sync::atomic::Ordering::SeqCst), 2, "one fetch per source, then the cache");
+        // A failure is remembered too, not retried on every call.
+        static DOWN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn offline(_: &str) -> Result<Value, String> {
+            DOWN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("offline".into())
+        }
+        let mut down = Prices::default();
+        assert!(down.get(offline).unwrap_err().contains("no price source"));
+        assert!(down.get(offline).is_err());
+        assert_eq!(DOWN.load(std::sync::atomic::Ordering::SeqCst), 2, "asked once per source, then cached");
     }
 }

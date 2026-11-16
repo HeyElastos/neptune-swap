@@ -61,6 +61,22 @@ pub fn market_note(give_usd: f64, want_usd: f64) -> String {
     }
 }
 
+/// Why a price is not good enough to compare with: one source only, sources
+/// that disagree, or an old one. None when it is fine.
+pub fn doubt(prices: &Value, symbol: &str, now: u64) -> Option<String> {
+    let p = &prices["prices"][symbol];
+    if p["disagree"] == true {
+        return Some(format!("the sources disagree on {symbol}"));
+    }
+    if p["updated_at"].as_u64().is_some_and(|at| now.saturating_sub(at) > 15 * 60) {
+        return Some(format!("the {symbol} price is old"));
+    }
+    if p["sources"].as_array().is_some_and(|s| s.len() < 2) {
+        return Some(format!("{symbol} has one source"));
+    }
+    None
+}
+
 /// The form's USD lines: under each amount, and the note below the form.
 #[derive(Default, Debug, PartialEq)]
 pub struct Lines {
@@ -69,7 +85,7 @@ pub struct Lines {
     pub note: String,
 }
 
-pub fn lines(prices: &Value, give: (&str, &str), want: (&str, &str)) -> Lines {
+pub fn lines(prices: &Value, give: (&str, &str), want: (&str, &str), now: u64) -> Lines {
     let (gp, wp) = (price(prices, give.0), price(prices, want.0));
     let gv = gp.and_then(|p| value(give.1, p));
     let wv = wp.and_then(|p| value(want.1, p));
@@ -79,8 +95,14 @@ pub fn lines(prices: &Value, give: (&str, &str), want: (&str, &str)) -> Lines {
         .collect();
     rates.dedup();
     let mut note = rates.join(" · ");
-    if let (Some(g), Some(w)) = (gv, wv) {
+    let doubts: Vec<String> = [give.0, want.0].iter().filter_map(|s| doubt(prices, s, now)).collect();
+    if let (Some(g), Some(w), false) = (gv, wv, doubts.iter().any(|d| !d.contains("one source"))) {
         note = format!("{note}. {}", market_note(g, w));
+        if !doubts.is_empty() {
+            note = format!("{note} Note: {}.", doubts.join(", "));
+        }
+    } else if gv.is_some() && wv.is_some() {
+        note = format!("{note}. No comparison: {}.", doubts.join(", "));
     } else if gp.is_none() || wp.is_none() {
         let missing = if gp.is_none() { give.0 } else { want.0 };
         note = if note.is_empty() { format!("No price for {missing}.") } else { format!("{note}. No price for {missing}.") };
@@ -99,24 +121,38 @@ mod tests {
 
     #[test]
     fn amounts_get_usd_and_a_market_note() {
-        let l = lines(&prices(), ("USDC", "250"), ("NPT", "1500"));
+        let l = lines(&prices(), ("USDC", "250"), ("NPT", "1500"), 0);
         assert_eq!(l.give, "≈ $250.00");
         assert_eq!(l.want, "≈ $225.00");
         assert_eq!(l.note, "1 USDC ≈ $1.00 · 1 NPT ≈ $0.1500. You would get 10% less than the market rate.");
-        let l = lines(&prices(), ("BTC", "0.234234"), ("NPT", "14"));
+        let l = lines(&prices(), ("BTC", "0.234234"), ("NPT", "14"), 0);
         assert_eq!(l.give, "≈ $15,109.47");
         assert_eq!(l.want, "≈ $2.10");
         assert!(l.note.ends_with("You would get 100% less than the market rate."));
     }
 
     #[test]
+    fn doubtful_prices_say_so_and_give_no_comparison() {
+        let p = json!({"prices": {
+            "NPT": {"usd": "0.15", "sources": ["coingecko"], "updated_at": 1000},
+            "USDC": {"usd": "1", "sources": ["coingecko", "kraken"], "updated_at": 1000},
+            "ETH": {"usd": "1800", "sources": ["coingecko", "kraken"], "disagree": true, "updated_at": 1000}}});
+        let l = lines(&p, ("USDC", "250"), ("NPT", "1500"), 1000);
+        assert!(l.note.ends_with("You would get 10% less than the market rate. Note: NPT has one source."), "{}", l.note);
+        let l = lines(&p, ("ETH", "1"), ("NPT", "1500"), 1000);
+        assert!(l.note.ends_with("No comparison: the sources disagree on ETH, NPT has one source."), "{}", l.note);
+        let l = lines(&p, ("USDC", "250"), ("NPT", "1500"), 1000 + 3600);
+        assert!(l.note.ends_with("No comparison: the USDC price is old, the NPT price is old."), "{}", l.note);
+    }
+
+    #[test]
     fn asking_more_and_fair_and_missing_prices_read_well() {
         assert_eq!(market_note(100.0, 130.0), "You ask 30% more than the market rate; solvers may not answer.");
         assert_eq!(market_note(100.0, 100.4), "Close to the market rate.");
-        let l = lines(&prices(), ("ELA", "5"), ("NPT", "10"));
+        let l = lines(&prices(), ("ELA", "5"), ("NPT", "10"), 0);
         assert_eq!((l.give.as_str(), l.want.as_str()), ("", "≈ $1.50"));
         assert_eq!(l.note, "1 NPT ≈ $0.1500. No price for ELA.");
-        let l = lines(&prices(), ("USDC", ""), ("NPT", "abc"));
+        let l = lines(&prices(), ("USDC", ""), ("NPT", "abc"), 0);
         assert_eq!((l.give.as_str(), l.want.as_str()), ("", ""));
         assert_eq!(format(0.004), "< $0.01");
         assert_eq!(unit("BTC", 64505.9), "1 BTC ≈ $64,506");

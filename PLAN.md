@@ -310,6 +310,29 @@ a coin received before the wallet kept the set still asks the node once.
 Not built yet: per-DID rate limits and proof of work, reputation, the signed solver list,
 encrypted seed. elastOS 0.8.0 isolation gaps (see Known limits) still apply.
 
+**Security review, 2026-11-16 (independent pass over everything since the rename), fixed:**
+- Offers: tombstones for withdrawn offers (no replay), terms fixed per id (a copy may only live
+  longer), taking uses exactly the row seen, assets match on chain and symbol, a full list
+  evicts the soonest-ending offer, each poll drains the topic, listening only on request,
+  solver IDs shown 8 + 8 characters (the fixed `z6Mk` prefix is skipped), five own offers at
+  most, at most 60 offer signatures an hour in the provider.
+- Gateway: topics `neptune-swap`, `neptune-swap/…`, `neptune-swap-…` only; `get_ticket` and
+  `gossip_join_exact` removed; at most 4 topics per launch; sender id per launch and topic.
+  Wallet bridge: apps other than the Browser are named by the gateway
+  (`https://<app>.app.elastos`), never by themselves. Prices approval per user, 12 h, a no
+  holds 10 min without asking again, failed polls stay pending, timeouts.
+- Prices: both sources at once with 4 s timeouts, failures cached a minute; the market note
+  says when a price has one source, sources disagree or it is old (no comparison then).
+- Addresses: at most 25 unused per kind (`KEY_GAP`).
+- Manifest declares wallet, prices, offer signing and the carrier topics.
+
+**Still open from the review:** Sybil flooding of the public offers topic can still crowd the
+list (needs proof of work or a stake per offer, and per-peer limits in the runtime's carrier);
+reputation and a signed solver list (unknown solvers are not marked yet); `send` falls back to
+the node's membership proofs silently, and fast restore (`apply_unordered_blocks`) does not
+check blocks against the verified chain; the gateway and managed runtime carrier nodes are
+still untested live.
+
 ## M8 design: the other leg through elastOS Wallet (read from runtime v2.0.1)
 
 What elastOS 2.0.1 offers (`docs/CHAIN_PROVIDER.md`, `docs/WALLET_PROVIDER.md`):

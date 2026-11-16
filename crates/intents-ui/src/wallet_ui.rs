@@ -546,9 +546,16 @@ async fn send(weak: Weak<AppWindow>, page: Shared) {
         app.set_wallet_send_to(SharedString::new());
         app.set_wallet_send_amount(SharedString::new());
         app.set_wallet_state("ready".into());
+        // Say so when the node had to supply membership proofs: it then
+        // learned which coins this payment spent.
+        let proofs = if sent["proofs"] == "node" {
+            " This payment used the node's membership proofs for coins received before this wallet kept its own, so the node saw which coins it spent."
+        } else {
+            ""
+        };
         app.set_wallet_notice(
             format!(
-                "Sent {} NPT. It counts once a block includes it; {} NPT change comes back to this wallet.",
+                "Sent {} NPT. It counts once a block includes it; {} NPT change comes back to this wallet.{proofs}",
                 sent["sent"].as_str().unwrap_or("?"),
                 sent["change"].as_str().unwrap_or("0"),
             )

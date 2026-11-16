@@ -9,13 +9,18 @@
   "runtime_abi": "elastos.runtime-projection/v1",
   "bus_contract": "elastos.runtime-projection/v1",
   "execution": "web-projection",
-  "projections": ["web", "facts", "affordances", "gates"],
+  "projections": [
+    "web",
+    "facts",
+    "affordances",
+    "gates"
+  ],
   "entrypoint": "browser/index.html",
   "interfaces": [
     {
       "id": "neptune.swap",
       "version": "0.1.0",
-      "description": "Neptune Swap: compose private swaps and use the Neptune wallet",
+      "description": "Neptune Swap: private swaps, the Neptune wallet, standing offers",
       "methods": [
         {
           "id": "networks.view",
@@ -34,6 +39,42 @@
           "audit": "summary",
           "resource": "elastos://neptune/*",
           "operation": "status"
+        },
+        {
+          "id": "wallet.use",
+          "description": "Create, sync and use this Home's Neptune wallet (seed and keys stay in the provider)",
+          "risk": "payment",
+          "approval": "runtime_policy",
+          "audit": "full",
+          "resource": "elastos://neptune/*",
+          "operation": "wallet"
+        },
+        {
+          "id": "prices.view",
+          "description": "Show USD reference prices; the Runtime asks the user first (the sources see this computer's address)",
+          "risk": "read",
+          "approval": "user",
+          "audit": "summary",
+          "resource": "elastos://neptune/prices",
+          "operation": "prices"
+        },
+        {
+          "id": "offers.sign",
+          "description": "Sign a standing offer with this wallet's solver key (the key stays in the provider; at most 60 an hour)",
+          "risk": "write",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/*",
+          "operation": "offer_sign"
+        },
+        {
+          "id": "offers.carrier",
+          "description": "Join, send on and read its own carrier topics only: neptune-swap/offers/main, neptune-swap/offers/test",
+          "risk": "write",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://peer/*",
+          "operation": "gossip"
         }
       ]
     }

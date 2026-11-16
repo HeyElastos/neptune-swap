@@ -242,15 +242,17 @@ fn new_addresses_are_fresh_and_still_receive() {
     assert_eq!(w.receiving_address().unwrap(), first.address);
     // Far past the scan window's start: the window follows the issued address.
     let mut latest = first.clone();
-    for _ in 0..40 {
+    for _ in 0..24 {
         latest = w.new_address(history::AddressKind::Generation).unwrap();
     }
-    assert_eq!(latest.index, 40);
+    assert_eq!(latest.index, 24);
+    // 25 unused addresses: no more until one of them receives.
+    assert!(w.new_address(history::AddressKind::Generation).is_err());
     assert_ne!(latest.address, first.address);
     assert_eq!(w.receiving_address().unwrap(), latest.address);
 
     let entropy = WalletEntropy::from_phrase(PHRASE.split_whitespace()).unwrap();
-    let (r40, n40) = payment(&entropy.nth_generation_spending_key(40).into(), 3);
+    let (r40, n40) = payment(&entropy.nth_generation_spending_key(24).into(), 3);
     let short_key: SpendingKey = entropy.nth_ec_hybrid_key(0).into();
     let (rs, ns) = payment(&short_key, 1);
     let b1 = block_after(&genesis, vec![r40, rs], vec![], vec![n40, ns]);
@@ -262,9 +264,11 @@ fn new_addresses_are_fresh_and_still_receive() {
 
     // Every handed-out address is listed, newest first, with what it received.
     let listed = w.issued_addresses(history::AddressKind::Generation).unwrap();
-    assert_eq!(listed.len(), 41);
-    assert_eq!((listed[0].index, listed[0].current, listed[0].payments, listed[0].received.as_str()), (40, true, 1, "3"));
-    assert_eq!((listed[40].index, listed[40].payments, listed[40].address.clone()), (0, 0, first.address));
+    assert_eq!(listed.len(), 25);
+    assert_eq!((listed[0].index, listed[0].current, listed[0].payments, listed[0].received.as_str()), (24, true, 1, "3"));
+    assert_eq!((listed[24].index, listed[24].payments, listed[24].address.clone()), (0, 0, first.address));
+    // Once the newest received, new ones can be handed out again.
+    assert_eq!(w.new_address(history::AddressKind::Generation).unwrap().index, 25);
     let shorts = w.issued_addresses(history::AddressKind::EcHybrid).unwrap();
     assert_eq!((shorts.len(), shorts[0].payments, shorts[0].received.as_str()), (1, 1, "1"));
 }

@@ -152,7 +152,14 @@ impl LightWallet {
             .max()
             .unwrap_or(0);
         let slot = kind.issued_slot();
-        self.state.issued[slot] = (self.state.issued[slot] + 1).max(used_up_to);
+        let next = (self.state.issued[slot] + 1).max(used_up_to);
+        // At most KEY_GAP unused addresses at once: the scan window and the
+        // address list stay bounded however often this is asked.
+        anyhow::ensure!(
+            next + 1 - used_up_to <= KEY_GAP,
+            "{KEY_GAP} addresses of this kind are still unused: hand out one of those first"
+        );
+        self.state.issued[slot] = next;
         let mut wanted = self.state.derived;
         let derived = kind.derived_slot();
         wanted[derived] = wanted[derived].max(self.state.issued[slot] + 1 + KEY_GAP);
