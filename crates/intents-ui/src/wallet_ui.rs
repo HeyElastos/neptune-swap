@@ -62,7 +62,7 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
         app.on_wallet_phrase_done(move || {
             let app = weak.unwrap();
             // The words leave the page for good.
-            app.set_wallet_phrase_rows(ModelRc::new(VecModel::<WordRow>::default()));
+            app.set_wallet_phrase_pairs(ModelRc::new(VecModel::<WordRow>::default()));
             app.set_wallet_state("ready".into());
             spawn(sync(weak.clone(), page.clone()));
         });
@@ -186,7 +186,7 @@ async fn create(weak: Weak<AppWindow>, page: Shared) {
             show_address(&weak, &page, created["address"].as_str().unwrap_or_default());
             let words: Vec<String> = created["phrase"].as_str().unwrap_or_default().split(' ').map(str::to_string).collect();
             let Some(app) = weak.upgrade() else { return };
-            app.set_wallet_phrase_rows(ModelRc::new(VecModel::from(word_rows(&words))));
+            app.set_wallet_phrase_pairs(ModelRc::new(VecModel::from(word_rows_of(&words, 2))));
             app.set_wallet_busy(false);
             app.set_wallet_state("phrase".into());
         }
@@ -344,12 +344,13 @@ pub(crate) fn shorten(address: &str) -> String {
     format!("{}…{}", &address[..24], &address[address.len() - 16..])
 }
 
-pub(crate) fn word_rows(words: &[String]) -> Vec<WordRow> {
+/// The words `per_row` to a row, numbered; unused cells stay empty.
+pub(crate) fn word_rows_of(words: &[String], per_row: usize) -> Vec<WordRow> {
     words
-        .chunks(3)
+        .chunks(per_row)
         .enumerate()
         .map(|(row, chunk)| {
-            let cell = |i: usize| chunk.get(i).map_or(SharedString::new(), |w| format!("{}. {w}", row * 3 + i + 1).into());
+            let cell = |i: usize| chunk.get(i).map_or(SharedString::new(), |w| format!("{}. {w}", row * per_row + i + 1).into());
             WordRow { a: cell(0), b: cell(1), c: cell(2) }
         })
         .collect()
@@ -386,7 +387,7 @@ fn demo_state(app: &AppWindow, state: &str) {
                 .split(' ')
                 .map(str::to_string)
                 .collect();
-            app.set_wallet_phrase_rows(ModelRc::new(VecModel::from(word_rows(&words))));
+            app.set_wallet_phrase_pairs(ModelRc::new(VecModel::from(word_rows_of(&words, 2))));
             app.set_wallet_state("phrase".into());
         }
         _ => {
@@ -414,10 +415,14 @@ mod tests {
     #[test]
     fn eighteen_words_make_six_numbered_rows() {
         let words: Vec<String> = (1..=18).map(|i| format!("w{i}")).collect();
-        let rows = word_rows(&words);
+        let rows = word_rows_of(&words, 3);
         assert_eq!(rows.len(), 6);
         assert_eq!(rows[0].a, "1. w1");
         assert_eq!(rows[5].c, "18. w18");
+        let pairs = word_rows_of(&words, 2);
+        assert_eq!(pairs.len(), 9);
+        assert_eq!(pairs[8].b, "18. w18");
+        assert_eq!(pairs[8].c, "");
     }
 
     #[test]

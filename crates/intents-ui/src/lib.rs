@@ -72,6 +72,14 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
         None => set_node(&app, "idle", "Not in Home", "Open Neptune Intents from Home to reach the Neptune node."),
     }
+    // Development: NEPTUNE_INTENTS_SIZE=360x760 lays the window out at that size (a phone).
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some((w, h)) = runtime::query("size").and_then(|s| {
+        let (w, h) = s.split_once('x')?;
+        Some((w.parse::<f32>().ok()?, h.parse::<f32>().ok()?))
+    }) {
+        app.window().set_size(slint::LogicalSize::new(w, h));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(path) = runtime::query("shot") {
         shot_and_quit(&app, path);

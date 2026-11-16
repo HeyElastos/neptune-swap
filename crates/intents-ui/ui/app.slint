@@ -194,6 +194,9 @@ component Field inherits Rectangle {
     in property <string> placeholder;
     in property <bool> multi;
     in-out property <string> text;
+    // One line of the input's font, measured, so the box shows whole lines only.
+    property <length> line: probe.preferred-height;
+    probe := Text { text: "Ag"; font-size: Ty.body; visible: false; }
     border-radius: Rad.ctrl;
     background: Skin.on-glass;
     border-width: input.has-focus ? 2px : 0px;
@@ -204,16 +207,26 @@ component Field inherits Rectangle {
         spacing: Sp.xs;
         Text { text: root.label; color: Skin.muted; font-size: Ty.caption; }
         Rectangle {
-            height: root.multi ? 72px : 24px;
+            height: (root.multi ? 3 : 1) * root.line;
+            clip: true;
             input := TextInput {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: max(parent.height, self.preferred-height);
                 text <=> root.text;
                 color: Skin.ink;
                 font-size: Ty.body;
                 single-line: !root.multi;
-                wrap: root.multi ? word-wrap : no-wrap;
+                wrap: root.multi ? char-wrap : no-wrap;
+                vertical-alignment: top;
                 selection-background-color: Skin.accent.with-alpha(0.35);
             }
             if root.text == "": Text {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
                 text: root.placeholder;
                 color: Skin.faint;
                 font-size: Ty.body;
@@ -231,7 +244,8 @@ component WalletCard inherits VerticalLayout {
     in property <string> state;
     in property <bool> busy;
     in property <string> error;
-    in property <[WordRow]> phrase-rows;
+    // The seed, two words to a row: readable at any width (c stays empty).
+    in property <[WordRow]> phrase-pairs;
     in property <string> balance;
     in property <string> spendable;
     in property <string> sync-label;
@@ -292,9 +306,9 @@ component WalletCard inherits VerticalLayout {
         words := VerticalLayout {
             padding: Sp.m;
             spacing: Sp.xs;
-            for row in root.phrase-rows: HorizontalLayout {
+            for row in root.phrase-pairs: HorizontalLayout {
                 spacing: Sp.m;
-                for word in [row.a, row.b, row.c]: Text {
+                for word in [row.a, row.b]: Text {
                     // Equal columns, whatever the words' widths.
                     min-width: 0px;
                     preferred-width: 0px;
@@ -337,15 +351,10 @@ component WalletCard inherits VerticalLayout {
     if root.state == "ready": Text { text: "Balance"; color: Skin.muted; font-size: Ty.caption; }
     if root.state == "ready": Text { text: root.balance + " NPT"; color: Skin.ink; font-size: Ty.display; font-weight: Ty.strong; }
     if root.state == "ready" && root.spendable != "": Text { text: root.spendable; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+    if root.state == "ready": Text { text: root.sync-label; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
     if root.state == "ready": HorizontalLayout {
-        spacing: Sp.m;
-        Text {
-            text: root.sync-label;
-            color: Skin.muted;
-            font-size: Ty.small;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
-        }
+        alignment: end;
+        spacing: Sp.s;
         Button { text: root.busy ? "Syncing…" : "Sync"; primary: false; enabled: !root.busy; clicked => { root.sync(); } }
         Button { text: "Send"; enabled: !root.busy; clicked => { root.start-send(); } }
     }
@@ -357,22 +366,17 @@ component WalletCard inherits VerticalLayout {
             padding: Sp.m;
             spacing: Sp.xs;
             Text { text: "Receive at"; color: Skin.muted; font-size: Ty.caption; }
-            Text { text: root.address-short; color: Skin.ink; font-size: Ty.small; }
+            // One line, elided on a narrow screen; Copy address takes it whole.
+            Text { text: root.address-short; color: Skin.ink; font-size: Ty.small; overflow: elide; min-width: 0px; }
             HorizontalLayout {
-                spacing: Sp.m;
+                alignment: end;
                 padding-top: Sp.xs;
-                Text {
-                    text: root.copy-note;
-                    color: Skin.muted;
-                    font-size: Ty.caption;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
                 Button { text: "Copy address"; primary: false; clicked => { root.copy-address(); } }
             }
         }
     }
 
+    if root.state == "ready" && root.copy-note != "": Text { text: root.copy-note; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
     if root.state == "ready" && root.notice != "": Text { text: root.notice; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
 
     // Send: the form.
@@ -385,8 +389,9 @@ component WalletCard inherits VerticalLayout {
     }
     if root.state == "send": HorizontalLayout {
         spacing: Sp.m;
-        Field { label: "Amount (NPT)"; placeholder: "0"; text <=> root.send-amount; }
-        Field { label: "Fee (NPT)"; placeholder: "0.05"; text <=> root.send-fee; }
+        // Equal halves, whatever is typed.
+        Field { label: "Amount (NPT)"; placeholder: "0"; text <=> root.send-amount; horizontal-stretch: 1; preferred-width: 0px; }
+        Field { label: "Fee (NPT)"; placeholder: "0.05"; text <=> root.send-fee; horizontal-stretch: 1; preferred-width: 0px; }
     }
     if root.state == "send": HorizontalLayout {
         alignment: end;
@@ -512,7 +517,7 @@ export component AppWindow inherits Window {
     in property <string> wallet-state: "loading";
     in property <bool> wallet-busy;
     in property <string> wallet-error;
-    in property <[WordRow]> wallet-phrase-rows;
+    in property <[WordRow]> wallet-phrase-pairs;
     in property <string> wallet-balance;
     in property <string> wallet-spendable;
     in property <string> wallet-sync-label;
@@ -705,6 +710,14 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    // The switch first: it stays put whichever page is open.
+                    HorizontalLayout {
+                        alignment: start;
+                        Segmented {
+                            options: ["Swap", "Wallet"];
+                            selected <=> root.page;
+                        }
+                    }
                     Text {
                         text: root.page == 0
                             ? "Say what you want. Solvers compete in private, and the Neptune leg settles where nobody can see it."
@@ -712,13 +725,6 @@ export component AppWindow inherits Window {
                         color: Skin.ink;
                         font-size: Ty.small;
                         wrap: word-wrap;
-                    }
-                    HorizontalLayout {
-                        alignment: start;
-                        Segmented {
-                            options: ["Swap", "Wallet"];
-                            selected <=> root.page;
-                        }
                     }
                     if root.page == 1: Glass {
                         height: wallet-card.preferred-height;
@@ -728,7 +734,7 @@ export component AppWindow inherits Window {
                             state: root.wallet-state;
                             busy: root.wallet-busy;
                             error: root.wallet-error;
-                            phrase-rows: root.wallet-phrase-rows;
+                            phrase-pairs: root.wallet-phrase-pairs;
                             balance: root.wallet-balance;
                             spendable: root.wallet-spendable;
                             sync-label: root.wallet-sync-label;
@@ -879,7 +885,8 @@ export component AppWindow inherits Window {
             property <bool> narrow: root.width < 480px;
             // A reading surface: the tint denser than chrome (Hyper frost-dense, 94 %).
             tint: 0.94;
-            width: self.narrow ? root.width : min(440px, root.width - 2 * Sp.l);
+            // As wide as the card under it, so none of the form shows at its sides.
+            width: self.narrow ? root.width : min(lane.width, root.width - 2 * Sp.l);
             height: sheet.preferred-height;
             x: (root.width - self.width) / 2;
             y: (self.narrow ? root.height - self.height : (root.height - self.height) / 2) + (root.review-open ? 0px : Motion.overlay-rise);
