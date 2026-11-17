@@ -703,6 +703,7 @@ pub fn demo(app: &AppWindow, which: &str) {
             .collect()
     };
     app.set_swap_on(true);
+    app.set_page(3);
     if which == "swap-get" {
         app.set_swap_title("250 USDC → 1,600 NPT".into());
         app.set_swap_line("Locked on Base. Waiting for the solver to claim it, which reveals the secret.".into());

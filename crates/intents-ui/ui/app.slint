@@ -251,6 +251,85 @@ export struct ActivityRow {
 }
 
 // An address handed out: which one, and what it received. A row opens it.
+// The app's four places, as icons drawn on a 20 x 20 grid.
+global Icons {
+    out property <string> swap: "M 4 7 L 16 7 M 12 3 L 16 7 L 12 11 M 16 13 L 4 13 M 8 9 L 4 13 L 8 17";
+    out property <string> market: "M 3 8 L 4.5 3.5 L 15.5 3.5 L 17 8 M 3 8 L 17 8 M 4 8 L 4 16.5 L 16 16.5 L 16 8 M 8 16.5 L 8 12 L 12 12 L 12 16.5";
+    out property <string> activity: "M 2 10 L 6 10 L 8 4.5 L 12 15.5 L 14 10 L 18 10";
+    out property <string> wallet: "M 3 6 L 17 6 L 17 16 L 3 16 Z M 3 6 L 14 3 L 15 6 M 13 11 L 15 11";
+}
+
+// One place in the navigation: a tab (icon over label) on a phone, a row in the side rail on
+// a wide window. A dot marks something that wants a look (a swap running).
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <bool> active;
+    in property <bool> rail;
+    in property <bool> dot;
+    callback clicked;
+    border-radius: Rad.ctrl;
+    background: root.active && root.rail ? Skin.hover : touch.has-hover ? Skin.hover : transparent;
+    animate background { duration: Motion.hover; }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    if !root.rail: VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 22px;
+                height: 22px;
+                Path {
+                    width: 20px;
+                    height: 20px;
+                    viewbox-width: 20;
+                    viewbox-height: 20;
+                    commands: root.icon;
+                    stroke: root.active ? Skin.accent-text : Skin.muted;
+                    stroke-width: 1.6px;
+                    fill: transparent;
+                }
+                if root.dot: Rectangle { x: 17px; y: 0px; width: 7px; height: 7px; border-radius: 3.5px; background: Skin.accent; }
+            }
+        }
+        Text {
+            text: root.label;
+            horizontal-alignment: center;
+            font-size: Ty.caption;
+            font-weight: root.active ? Ty.strong : Ty.label;
+            color: root.active ? Skin.accent-text : Skin.muted;
+        }
+    }
+    if root.rail: HorizontalLayout {
+        padding-left: Sp.m;
+        padding-right: Sp.m;
+        spacing: Sp.m;
+        VerticalLayout {
+            alignment: center;
+            Path {
+                width: 18px;
+                height: 18px;
+                viewbox-width: 20;
+                viewbox-height: 20;
+                commands: root.icon;
+                stroke: root.active ? Skin.accent-text : Skin.muted;
+                stroke-width: 1.6px;
+                fill: transparent;
+            }
+        }
+        Text {
+            text: root.label;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            font-size: Ty.body;
+            font-weight: root.active ? Ty.strong : Ty.label;
+            color: root.active ? Skin.ink : Skin.muted;
+        }
+        if root.dot: VerticalLayout { alignment: center; Rectangle { width: 7px; height: 7px; border-radius: 3.5px; background: Skin.accent; } }
+    }
+}
+
 export struct StepRow {
     text: string,
     // "done", "now", "todo" or "failed"
@@ -314,7 +393,7 @@ export struct AddressRow {
 component AddressItem inherits Rectangle {
     in property <AddressRow> entry;
     callback open();
-    height: 52px;
+    height: 46px;
     HorizontalLayout {
         spacing: Sp.m;
         VerticalLayout {
@@ -337,7 +416,7 @@ component AddressItem inherits Rectangle {
 
 component ActivityItem inherits Rectangle {
     in property <ActivityRow> entry;
-    height: 52px;
+    height: 46px;
     HorizontalLayout {
         spacing: Sp.m;
         VerticalLayout {
@@ -892,7 +971,19 @@ export component AppWindow inherits Window {
     property <bool> show-json;
 
     // 0: the swap, 1: the wallet, 2: offers as a solver.
+    // The page shown: 0 Swap, 1 Wallet, 2 Market, 3 Activity (the numbers Rust uses).
     in-out property <int> page;
+    // A wide window gets a side rail; a phone a tab bar at the bottom.
+    property <bool> wide: root.width >= 760px;
+    property <[{label: string, icon: string, page: int}]> tabs: [
+        { label: "Swap", icon: Icons.swap, page: 0 },
+        { label: "Market", icon: Icons.market, page: 2 },
+        { label: "Activity", icon: Icons.activity, page: 3 },
+        { label: "Wallet", icon: Icons.wallet, page: 1 },
+    ];
+    pure function tab-of(page: int) -> int {
+        page == 0 ? 0 : page == 2 ? 1 : page == 3 ? 2 : 3
+    }
     callback page-changed(int);
     changed page => { root.page-changed(self.page); }
 
@@ -1010,17 +1101,17 @@ export component AppWindow inherits Window {
         Wallpaper { }
 
         VerticalLayout {
-            // The bar: the app's name and the node, glanced at.
+            // The bar: where you are, and the node, glanced at.
             HorizontalLayout {
-                height: 52px;
+                height: 48px;
                 padding-left: Sp.l;
                 padding-right: Sp.l;
                 spacing: Sp.m;
                 Text {
-                    text: "Neptune Swap";
+                    text: root.wide ? "Neptune Swap" : root.tabs[root.tab-of(root.page)].label;
                     color: Skin.ink;
-                    font-size: Ty.title;
-                    font-weight: Ty.strong;
+                    font-size: root.wide ? Ty.title : Ty.display;
+                    font-weight: Ty.bold;
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; }
@@ -1060,29 +1151,50 @@ export component AppWindow inherits Window {
                 }
             }
 
-            // The page scrolls under the bar when it is taller than the window (history, a phone).
-            // The lane is at most 560 wide.
-            Flickable {
+            HorizontalLayout {
                 vertical-stretch: 1;
-                content-width: self.width;
-                content-height: max(self.height, page.preferred-height);
-                page := HorizontalLayout {
-                // Pinned to the top: a short page would otherwise sit centred.
-                x: 0;
-                y: 0;
-                width: parent.width;
-                height: self.preferred-height;
-                alignment: center;
-                padding-left: Sp.l;
-                padding-right: Sp.l;
-                padding-bottom: Sp.xl;
-                lane := VerticalLayout {
-                    preferred-width: 560px;
-                    max-width: 560px;
+                min-height: 0px;
+                // A wide window: the places as a side rail.
+                if root.wide: VerticalLayout {
+                    width: 196px;
+                    padding-left: Sp.m;
+                    padding-right: Sp.s;
                     padding-top: Sp.s;
-                    spacing: Sp.l;
-                    // The node's details open here, under its chip, and push the page down: a
-                    // floating popover would cover the intro text.
+                    spacing: 2px;
+                    alignment: start;
+                    for tab in root.tabs: NavItem {
+                        height: 38px;
+                        rail: true;
+                        label: tab.label;
+                        icon: tab.icon;
+                        active: root.page == tab.page;
+                        dot: tab.page == 3 && root.swap-on && !root.swap-finished;
+                        clicked => { root.page = tab.page; }
+                    }
+                }
+
+                // The page scrolls under the bar; the lane is at most 520 wide.
+                Flickable {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    content-width: self.width;
+                    content-height: max(self.height, page.preferred-height);
+                    page := HorizontalLayout {
+                    // Pinned to the top: a short page would otherwise sit centred.
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: self.preferred-height;
+                    alignment: center;
+                    padding-left: Sp.l;
+                    padding-right: Sp.l;
+                    padding-bottom: Sp.xl;
+                    lane := VerticalLayout {
+                        preferred-width: 520px;
+                        max-width: 520px;
+                        padding-top: Sp.xs;
+                        spacing: Sp.m;
+                        // The node's details open here, under its chip.
                     if root.popover == "node": Glass {
                         radius: Rad.ctrl;
                         floating: false;
@@ -1119,22 +1231,33 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    // The switch first: it stays put whichever page is open.
-                    HorizontalLayout {
-                        alignment: start;
-                        Segmented {
-                            options: ["Swap", "Wallet", "Offer"];
-                            selected <=> root.page;
+
+                        // A swap running, from any page: one tap to follow it.
+                        if root.swap-on && !root.swap-finished && root.page != 3: Glass {
+                            radius: Rad.pill;
+                            height: 36px;
+                            HorizontalLayout {
+                                padding-left: Sp.l;
+                                padding-right: Sp.l;
+                                spacing: Sp.s;
+                                VerticalLayout { alignment: center; Rectangle { width: 7px; height: 7px; border-radius: 3.5px; background: Skin.accent; } }
+                                Text { text: "Swap running · " + root.swap-title; color: Skin.ink; font-size: Ty.small; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                Text { text: "View"; color: Skin.accent-text; font-size: Ty.small; font-weight: Ty.strong; vertical-alignment: center; }
+                            }
+                            TouchArea { mouse-cursor: pointer; clicked => { root.page = 3; } }
                         }
-                    }
-                    Text {
-                        text: root.page == 0
-                            ? "Say what you want. Solvers compete in private, and the Neptune leg settles where nobody can see it."
-                            : root.page == 1 ? "Your NPT, held by this Home's Neptune provider."
-                            : "Offer NPT trades to everyone running Neptune Swap.";
-                        color: Skin.ink;
-                        font-size: Ty.small;
-                        wrap: word-wrap;
+                    if root.page == 2: Glass {
+                        height: offers-card.preferred-height;
+                        offers-card := OffersCard {
+                            // Known width, so wrapped lines count in its height.
+                            width: parent.width;
+                            pair: root.offers-pair;
+                            status: root.offers-status;
+                            rows: root.offer-rows;
+                            on: root.offers-on;
+                            take(i) => { root.take-offer(i); root.page = 0; }
+                            show => { root.show-offers(); }
+                        }
                     }
                     if root.page == 2: Glass {
                         height: solver-card.preferred-height;
@@ -1309,7 +1432,7 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    if root.page == 0 && root.swap-on: Glass {
+                    if root.page == 3 && root.swap-on: Glass {
                         height: swap-card.preferred-height;
                         swap-card := SwapCard {
                             width: parent.width;
@@ -1320,20 +1443,46 @@ export component AppWindow inherits Window {
                             dismiss => { root.swap-dismiss(); }
                         }
                     }
-                    if root.page == 0: Glass {
-                        height: offers-card.preferred-height;
-                        offers-card := OffersCard {
-                            // Known width, so wrapped lines count in its height.
-                            width: parent.width;
-                            pair: root.offers-pair;
-                            status: root.offers-status;
-                            rows: root.offer-rows;
-                            on: root.offers-on;
-                            take(i) => { root.take-offer(i); }
-                            show => { root.show-offers(); }
+                        if root.page == 3 && !root.swap-on: Glass {
+                            height: empty.preferred-height;
+                            empty := VerticalLayout {
+                                padding: Sp.xl;
+                                spacing: Sp.s;
+                                Text { text: "No swaps yet"; color: Skin.ink; font-size: Ty.title; font-weight: Ty.strong; horizontal-alignment: center; }
+                                Text {
+                                    text: "Take an offer in Market, review it on Swap, and follow it here step by step.";
+                                    color: Skin.muted;
+                                    font-size: Ty.small;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
                         }
                     }
+                    }
                 }
+            }
+
+            // A phone: the places as a tab bar, always in reach.
+            if !root.wide: Glass {
+                height: 58px;
+                vertical-stretch: 0;
+                radius: 0px;
+                floating: false;
+                HorizontalLayout {
+                    padding-left: Sp.s;
+                    padding-right: Sp.s;
+                    padding-top: 4px;
+                    padding-bottom: 6px;
+                    spacing: 4px;
+                    for tab in root.tabs: NavItem {
+                        horizontal-stretch: 1;
+                        label: tab.label;
+                        icon: tab.icon;
+                        active: root.page == tab.page;
+                        dot: tab.page == 3 && root.swap-on && !root.swap-finished;
+                        clicked => { root.page = tab.page; }
+                    }
                 }
             }
         }
@@ -1349,8 +1498,13 @@ export component AppWindow inherits Window {
             anchor-y: root.pop-top;
             width: 240px;
             x: max(Sp.s, root.pop-right - self.width);
-            height: asset-list.preferred-height;
+            // At most what fits below its anchor; longer lists scroll inside the popover, not the page.
+            height: min(asset-list.preferred-height, root.height - root.pop-top - Sp.l);
+            Flickable {
+                viewport-height: asset-list.preferred-height;
+                viewport-width: self.width;
             asset-list := VerticalLayout {
+                width: parent.width;
                 padding: 6px;
                 Text {
                     text: root.popover == "want" ? "You want" : "You give";
@@ -1370,6 +1524,7 @@ export component AppWindow inherits Window {
                     chosen: i == (root.popover == "want" ? root.want-index : root.give-index);
                     clicked => { root.pick-asset(root.popover, i); }
                 }
+            }
             }
         }
 

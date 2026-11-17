@@ -60,6 +60,26 @@ manifest["external"]["neptune-provider"] = {
 json.dump(manifest, open(path, "w"), indent=2)
 PY
 
+# The fork's wallet provider (it lets this app ask Wallet for an account), when built:
+#   (cd <runtime fork>/capsules/wallet-provider && cargo build --release)
+#   WALLET_PROVIDER=<that target/release/wallet-provider> scripts/install-dev-home.sh
+if [ -n "${WALLET_PROVIDER:-}" ]; then
+  test -x "$WALLET_PROVIDER" || { echo "no wallet provider at $WALLET_PROVIDER" >&2; exit 1; }
+  [ -f "$DATA/bin/wallet-provider.release" ] || cp "$DATA/bin/wallet-provider" "$DATA/bin/wallet-provider.release"
+  cp "$WALLET_PROVIDER" "$DATA/bin/wallet-provider.new" && mv "$DATA/bin/wallet-provider.new" "$DATA/bin/wallet-provider"
+  WSUM="sha256:$(shasum -a 256 "$DATA/bin/wallet-provider" | cut -d' ' -f1)"
+  WSIZE="$(stat -f %z "$DATA/bin/wallet-provider")"
+  python3 -I - "$DATA/components.json" "$WSUM" "$WSIZE" <<'PY'
+import json, sys
+path, checksum, size = sys.argv[1], sys.argv[2], int(sys.argv[3])
+manifest = json.load(open(path))
+entry = manifest["external"]["wallet-provider"]["platforms"]["darwin-arm64"]
+entry["checksum"], entry["size"] = checksum, size
+json.dump(manifest, open(path, "w"), indent=2)
+PY
+  echo "installed the fork's wallet-provider"
+fi
+
 # Home's clipboard bridge allows only listed apps; let this one copy its address.
 python3 -I - "$DATA/capsules/home/browser/home-clipboard-protocol.js" <<'PY'
 import sys

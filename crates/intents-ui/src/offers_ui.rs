@@ -442,6 +442,7 @@ fn show_mine(app: &AppWindow, state: &Shared) {
 /// Development screenshots: the offer list (`?demo=offers`) and the solver
 /// page (`?demo=solver`), with sample offers.
 pub fn demo(app: &AppWindow, state: &str) {
+    app.set_page(2);
     let now = runtime::now_secs();
     let sample = |gives_npt: bool, other: &'static str, price: &'static str, min: &'static str, max: &'static str, solver: &str| {
         let form = SolverForm { gives_npt, other, price, min_npt: min, max_npt: max, ttl_secs: 1500 };
