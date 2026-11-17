@@ -24,7 +24,8 @@ getting theirs, breaks a timelock's ordering, forges or replays a message, leaks
 secret, links a user's swaps, or lets a page do more than its manifest declares.
 
 Out of scope: bugs in neptune-core or the elastOS runtime themselves (report those upstream),
-and the known limits listed in PLAN.md under "Risks" and "Known limits".
+and the known limits listed in PLAN.md under "Risks" and "Known limits" and the open items
+in `docs/swap-safety.md`.
 
 ## Status
 

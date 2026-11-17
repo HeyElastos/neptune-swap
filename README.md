@@ -78,7 +78,7 @@ open an issue or a pull request, and let us build it together.
 | `capsules/` | The capsule and provider manifests and the page shell. |
 | `patches/` | The wasm32 patch for neptune-core v0.20.1 and the elastOS runtime v2.0.1 patch. |
 | `scripts/` | Vendoring, builds, a local regtest node, an isolated development Home. |
-| `docs/` | The Wallet bridge and carrier routes. |
+| `docs/` | Swap safety rules, the general Runtime features this app needs, the Wallet bridge and carrier routes. |
 | `PLAN.md` | Design, rules, state and findings in detail. |
 
 ## Building
@@ -93,12 +93,14 @@ scripts/build-intents-capsule.sh
 ```
 
 Running it needs elastOS with the runtime patch applied (the `neptune` scheme, the app's
-gateway routes): see PLAN.md, "Architecture" and "M8"/"M9". `scripts/install-dev-home.sh` and
+gateway routes): see PLAN.md, "Architecture" and "M8"/"M9". `docs/runtime-hooks.md` lists the
+patch as general Runtime features, so that one day no patch is needed. `scripts/install-dev-home.sh` and
 `scripts/dev-home.sh` set up an isolated development Home; they refuse to touch a real one.
 
 ## Security model
 
-The rules the code holds to are in PLAN.md ("Rules"): keys never enter the capsule, nothing
+How a swap stays atomic (timeouts, the secret, lock checks, reorgs, fees) is in
+`docs/swap-safety.md`, with what is still open. The rules the code holds to are in PLAN.md ("Rules"): keys never enter the capsule, nothing
 listens on a port, inbound messages are dropped unless signed (and, for private messages,
 sealed) and bounded, a fresh `did:key` per intent. The risks that remain, and what is not
 built yet, are listed there too ("Risks").

@@ -75,6 +75,33 @@
           "audit": "summary",
           "resource": "elastos://peer/*",
           "operation": "gossip"
+        },
+        {
+          "id": "evm.account",
+          "description": "Ask elastOS Wallet to share one EVM account on Base with this app (the user approves in Wallet; 12 hours)",
+          "risk": "rights",
+          "approval": "user",
+          "audit": "summary",
+          "resource": "elastos://wallet/*",
+          "operation": "request_accounts"
+        },
+        {
+          "id": "evm.pay",
+          "description": "Ask elastOS Wallet to send a transaction on Base: lock, claim or refund in the swap contract, or an exact token approval for it (the user approves each one in Wallet)",
+          "risk": "payment",
+          "approval": "user",
+          "audit": "full",
+          "resource": "elastos://wallet/*",
+          "operation": "request_transaction"
+        },
+        {
+          "id": "evm.read",
+          "description": "Typed chain reads on Base through the Runtime's chain provider: eth_blockNumber, eth_call, eth_getCode, eth_getLogs, eth_getTransactionReceipt",
+          "risk": "read",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://chain/*",
+          "operation": "read"
         }
       ]
     }

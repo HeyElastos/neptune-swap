@@ -2,7 +2,7 @@
   "schema": "elastos.capsule/v1",
   "name": "neptune-provider",
   "version": "0.1.0",
-  "description": "Typed Neptune Cash reads over a local, outbound-only node",
+  "description": "Neptune Cash for apps: a light wallet (seed and keys stay here), swap locks, and typed reads over a local, outbound-only node",
   "author": "local-development",
   "role": "provider",
   "type": "native-provider",
@@ -11,21 +11,99 @@
   "entrypoint": "neptune-provider",
   "provides": "elastos://neptune/*",
   "authority": {
-    "reason": "Owns the loopback JSON-RPC address of a local neptune-core node and answers typed reads, so app capsules never receive a node address.",
+    "reason": "Holds the wallet seed and spending keys, proves Neptune transactions and swap locks, and owns the loopback JSON-RPC address of a local neptune-core node, so app capsules never receive a key or a node address. Reaches the network only through that node, and through two public price sources when the user has approved prices.",
     "capabilities": [
       {
+        "resource": "elastos://neptune/meta/networks",
+        "actions": [
+          "read"
+        ],
+        "operations": [
+          "networks"
+        ]
+      },
+      {
         "resource": "elastos://neptune/*",
-        "actions": ["read"],
-        "operations": ["networks", "status"]
+        "actions": [
+          "read"
+        ],
+        "operations": [
+          "status",
+          "wallet_status",
+          "wallet_balance",
+          "wallet_addresses",
+          "wallet_history",
+          "wallet_send_status",
+          "htlc_status",
+          "solver_identity"
+        ]
+      },
+      {
+        "resource": "elastos://neptune/*",
+        "actions": [
+          "write"
+        ],
+        "operations": [
+          "wallet_create",
+          "wallet_import",
+          "wallet_receive",
+          "wallet_new_address",
+          "wallet_sync",
+          "htlc_claim_lock",
+          "htlc_prepare",
+          "offer_sign"
+        ]
+      },
+      {
+        "resource": "elastos://neptune/*",
+        "actions": [
+          "execute"
+        ],
+        "operations": [
+          "wallet_send",
+          "htlc_lock",
+          "htlc_claim",
+          "htlc_refund"
+        ]
+      },
+      {
+        "resource": "elastos://neptune/htlc/secret",
+        "actions": [
+          "admin"
+        ],
+        "operations": [
+          "htlc_secret"
+        ]
+      },
+      {
+        "resource": "elastos://neptune/prices",
+        "actions": [
+          "read"
+        ],
+        "operations": [
+          "prices"
+        ]
       }
     ],
-    "audit_events": ["neptune.networks", "neptune.status"]
+    "audit_events": [
+      "neptune.networks",
+      "neptune.status",
+      "neptune.wallet.read",
+      "neptune.wallet.change",
+      "neptune.payment",
+      "neptune.swap.lock",
+      "neptune.swap.claim",
+      "neptune.swap.refund",
+      "neptune.swap.secret",
+      "neptune.offer.sign",
+      "neptune.prices"
+    ]
   },
   "interfaces": [
     {
       "id": "elastos.provider.neptune",
       "version": "0.1.0",
-      "description": "Neptune Cash network discovery and node status",
+      "description": "Neptune Cash: networks, node status, a light wallet, swap locks, solver keys, reference prices",
       "methods": [
         {
           "id": "networks",
@@ -44,6 +122,96 @@
           "audit": "summary",
           "resource": "elastos://neptune/*",
           "operation": "status"
+        },
+        {
+          "id": "wallet.read",
+          "description": "Wallet state, balance, addresses, history, send progress",
+          "risk": "read",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/*",
+          "operation": "wallet_status"
+        },
+        {
+          "id": "wallet.change",
+          "description": "Create or import the wallet, sync it, issue a receiving address",
+          "risk": "write",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/*",
+          "operation": "wallet_sync"
+        },
+        {
+          "id": "wallet.send",
+          "description": "Pay NPT to an address (proved here; keys never leave)",
+          "risk": "payment",
+          "approval": "runtime_policy",
+          "audit": "full",
+          "resource": "elastos://neptune/*",
+          "operation": "wallet_send"
+        },
+        {
+          "id": "swap.lock",
+          "description": "Lock NPT in a swap's hashed timelock",
+          "risk": "payment",
+          "approval": "runtime_policy",
+          "audit": "full",
+          "resource": "elastos://neptune/*",
+          "operation": "htlc_lock"
+        },
+        {
+          "id": "swap.claim",
+          "description": "Claim a counterparty's swap lock with the revealed secret",
+          "risk": "payment",
+          "approval": "runtime_policy",
+          "audit": "full",
+          "resource": "elastos://neptune/*",
+          "operation": "htlc_claim"
+        },
+        {
+          "id": "swap.refund",
+          "description": "Take back this wallet's swap lock after its timeout",
+          "risk": "payment",
+          "approval": "runtime_policy",
+          "audit": "full",
+          "resource": "elastos://neptune/*",
+          "operation": "htlc_refund"
+        },
+        {
+          "id": "swap.status",
+          "description": "Find a swap lock on chain and its depth",
+          "risk": "read",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/*",
+          "operation": "htlc_status"
+        },
+        {
+          "id": "swap.secret",
+          "description": "The secret of a swap this wallet locks NPT for, to claim the other chain's leg",
+          "risk": "rights",
+          "approval": "runtime_policy",
+          "audit": "full",
+          "resource": "elastos://neptune/htlc/secret",
+          "operation": "htlc_secret"
+        },
+        {
+          "id": "offers.sign",
+          "description": "Sign a standing offer with the solver key (at most 60 an hour)",
+          "risk": "write",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/*",
+          "operation": "offer_sign"
+        },
+        {
+          "id": "prices",
+          "description": "USD reference prices from two public sources, once the user has approved",
+          "risk": "read",
+          "approval": "user",
+          "audit": "summary",
+          "resource": "elastos://neptune/prices",
+          "operation": "prices"
         }
       ]
     }
