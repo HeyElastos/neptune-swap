@@ -35,7 +35,11 @@
           "wallet_history",
           "wallet_send_status",
           "htlc_status",
-          "solver_identity"
+          "solver_identity",
+          "htlc_spent",
+          "htlc_check",
+          "job_status",
+          "swap_list"
         ]
       },
       {
@@ -51,7 +55,8 @@
           "wallet_sync",
           "htlc_claim_lock",
           "htlc_prepare",
-          "offer_sign"
+          "offer_sign",
+          "swap_save"
         ]
       },
       {

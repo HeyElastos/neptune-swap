@@ -110,6 +110,16 @@ enum Request {
         least_refund_after_ms: u64,
         min_depth: u64,
     },
+    /// Whether a swap lock has been spent on chain.
+    HtlcSpent {
+        network: String,
+        #[serde(default)]
+        swap_id: Option<String>,
+        #[serde(default)]
+        note: Option<HtlcNote>,
+        #[serde(default)]
+        from_height: u64,
+    },
     /// Where a background proof (payment, swap lock, claim, refund) stands.
     JobStatus {
         network: String,
@@ -322,6 +332,9 @@ impl Provider {
                     w.wallets.htlc_check(&n.id, n.chain, note, from_height, &hash_lock, claim_index, &amount_nau, least_refund_after_ms, min_depth, &HttpNode(n.rpc.clone()))
                 })
             }
+            Request::HtlcSpent { network, swap_id, note, from_height } => self.wallet(&network, |w, n| {
+                w.wallets.htlc_spent(&n.id, swap_id.as_deref(), note.clone(), from_height, &HttpNode(n.rpc.clone()))
+            }),
             Request::JobStatus { network, job } => self.wallet(&network, |w, n| w.wallets.send_status(&n.id, n.chain, &job)),
             Request::SwapSave { network, id, record } => self.wallet(&network, |w, n| w.wallets.swap_save(&n.id, &id, record.clone())),
             Request::SwapList { network } => self.wallet(&network, |w, n| w.wallets.swap_list(&n.id)),

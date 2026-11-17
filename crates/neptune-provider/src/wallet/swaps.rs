@@ -11,7 +11,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use anyhow::{bail, ensure, Context, Result};
 use light_core::neptune_primitives::network::Network;
 use light_core::rpc;
-use light_core::swap::{hex, hex_bytes, locate, new_secret, HtlcNote, HtlcSpend, Located};
+use light_core::swap::{hex, hex_bytes, locate, new_secret, spent_in, HtlcNote, HtlcSpend, Located};
 use light_core::LightWallet;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -125,6 +125,19 @@ impl Wallets {
         ensure!(refund_after_ms > now_ms, "the refund time must be in the future");
         let claim_lock = light_core::neptune_wallet::twenty_first::prelude::Digest::try_from_hex(claim_lock.trim())
             .context("the claim lock is not a digest")?;
+        // Asked again for a prepared swap that is already locked (a lost reply, a reloaded
+        // page): the same lock, never a second one.
+        if let Some(id) = prepared {
+            let book = self.book(network_id)?;
+            if let Some(lock) = book.locks.iter().find(|l| l.id == id) {
+                ensure!(lock.note.claim_lock.eq_ignore_ascii_case(&claim_lock.to_hex()), "that swap is locked for another claim key");
+                return Ok(json!({ "swap_id": lock.id, "hash_lock": lock.note.hash_lock, "note": lock.note, "from_height": lock.sent_at_height, "existing": true }));
+            }
+        }
+        if proving == Proving::Background {
+            let jobs = self.jobs.lock().map_err(|_| anyhow::anyhow!("jobs lock"))?;
+            ensure!(!Self::proving(&jobs, network_id), "a transaction is still being proven; wait for it first");
+        }
         let prepared = match prepared {
             None => None,
             Some(id) => {
@@ -288,6 +301,33 @@ impl Wallets {
                 Ok(reply)
             }
         }
+    }
+
+    /// Whether a lock (this wallet's own by `swap_id`, or a counterparty's `note`) has been
+    /// spent on chain, and how deep that spend is.
+    pub fn htlc_spent(&self, network_id: &str, swap_id: Option<&str>, note: Option<HtlcNote>, from_height: u64, node: &dyn Node) -> Result<Value> {
+        let (note, from) = match (swap_id, note) {
+            (Some(id), _) => {
+                let book = self.book(network_id)?;
+                let lock = book.locks.iter().find(|l| l.id == id).context("no such swap")?;
+                (lock.note.clone(), lock.sent_at_height)
+            }
+            (None, Some(note)) => (note, from_height),
+            (None, None) => bail!("name a swap_id or give a note"),
+        };
+        let tip = rpc::parse_height(&node.call(rpc::height_request())?)?;
+        let Some(at) = find(&note, from, tip, node)? else {
+            return Ok(json!({ "found": false, "spent": false, "tip": tip }));
+        };
+        let mut start = at.height;
+        while start <= tip {
+            let end = tip.min(start + BATCH - 1);
+            if let Some(height) = spent_in(&note, at, &blocks(node, start, end)?) {
+                return Ok(json!({ "found": true, "spent": true, "height": height, "depth": tip.saturating_sub(height) + 1, "tip": tip }));
+            }
+            start = end + 1;
+        }
+        Ok(json!({ "found": true, "spent": false, "tip": tip }))
     }
 
     /// The NPT receiver's check of a counterparty's lock before it locks anything itself:

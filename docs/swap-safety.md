@@ -63,9 +63,10 @@ shorter one, and the NPT giver reveals the secret by claiming it.
 ## 5. Chain reorganisations
 
 - Neptune: a lock counts at a set depth on the receiver's own node (`min_depth`).
-- **Open:** the Base side waits for a receipt only, not for confirmations. Before any value
-  moves on a public chain: wait for a set number of blocks after the counterparty's lock
-  before locking or revealing, and re-read the lock just before revealing.
+- Base: the app waits 10 blocks after it first sees the solver's lock before revealing, and
+  reads the lock again right before the claim goes out (`ready_to_reveal`).
+- **Open:** counting from the lock's own block rather than from when the page first saw it,
+  and a re-org depth chosen for Base main net.
 
 ## 6. Fee spikes near a timeout
 
@@ -76,6 +77,28 @@ shorter one, and the NPT giver reveals the secret by claiming it.
   wait for my Neptune refund".
 - **Open:** a fee-bump policy for Base claims through Wallet, and a Neptune fee that follows
   the network (fixed at 0.05 NPT in tests).
+
+## 6b. Never giving up money that is owed
+
+From the independent review of the in-app swap flow (2026-11-17):
+- **Look for the secret before any refund on Base.** A solver's claim in the last block before
+  the refund time still pays the solver, so the user's NPT must still be claimed: the app
+  searches the `Claimed` log (from a block kept before its own lock went out) before every
+  Base refund and when it finds the lock spent.
+- **Re-check before revealing.** The claim on Base is sent only after the lock is read again
+  and still leaves time to claim safely (`may_reveal`); the swap is saved as "claim sent"
+  before the secret leaves the page, and from then on the claim is retried, never dropped.
+- **A Neptune claim or refund counts once the lock is spent on chain** (`htlc_spent`), not
+  when it is submitted; it is submitted again until then.
+- **A lock note holds exactly one native coin of the amount.** Another coin under a type
+  script the receiver cannot satisfy would make the lock unspendable while still adding up.
+- **The NPT lock is idempotent per swap:** asked again (a lost reply, a reloaded page), the
+  provider returns the same lock, never a second one.
+- **Every open swap is driven**, not only the newest; finished records are pruned from the
+  journal only when room is needed, never open ones; a failed save is shown and retried.
+- **Messages are sent again** while unanswered (the carrier gives no delivery receipt).
+- **A late Base lock is not made**: less than the chain's least lock time left means nothing
+  is locked.
 
 ## 7. Someone claiming on the user's behalf
 

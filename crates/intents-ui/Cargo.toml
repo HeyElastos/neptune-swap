@@ -35,6 +35,10 @@ console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = ["Window", "Location", "Headers", "Request", "RequestInit", "Response", "Crypto", "EventTarget", "Event", "MessageEvent", "Document", "HtmlDocument", "Element", "HtmlElement", "HtmlTextAreaElement", "HtmlHeadElement", "DomTokenList", "CssStyleDeclaration", "Node", "KeyboardEvent"] }
 
 [dev-dependencies]
+# The ignored end-to-end test: the solver and a local EVM key stand in for the other side and Wallet.
+solver = { path = "../solver" }
+evm-signer = { path = "../evm-signer" }
+anyhow.workspace = true
 
 [build-dependencies]
 slint-build = "=1.18.1"

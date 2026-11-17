@@ -14,7 +14,7 @@ use htlc::{Htlc, Spend};
 use neptune_consensus::transaction::lock_script::LockScriptAndWitness;
 use neptune_consensus::transaction::primitive_witness::PrimitiveWitness;
 use neptune_consensus::transaction::transaction_kernel::TransactionKernelField;
-use neptune_consensus::transaction::utxo::Utxo;
+use neptune_consensus::transaction::utxo::{Coin, Utxo};
 use neptune_mutator_set::addition_record::AdditionRecord;
 use neptune_mutator_set::commit;
 use neptune_mutator_set::mutator_set_accumulator::MutatorSetAccumulator;
@@ -67,12 +67,16 @@ impl HtlcNote {
     }
 
     /// The note describes exactly the agreed lock: its UTXO is locked by the
-    /// HTLC program of these terms and holds exactly `amount` NPT, nothing
-    /// else. (The full check, with the block, is swap-guard's.)
+    /// HTLC program of these terms and holds exactly one native-currency coin
+    /// of `amount` NPT and no other coin. Another coin (under a type script the
+    /// receiver's prover cannot satisfy) would make the lock unspendable while
+    /// still adding up to the amount. (The full check, with the block, is
+    /// swap-guard's.)
     pub fn check(&self) -> Result<()> {
         let htlc = self.htlc()?;
         ensure!(self.utxo.lock_script_hash() == htlc.program().hash(), "the coin is not locked by these terms");
-        ensure!(self.utxo.get_native_currency_amount() == parse_amount(&self.amount)?, "the coin does not hold the stated amount");
+        let expected = Coin::new_native_currency(parse_amount(&self.amount)?);
+        ensure!(self.utxo.coins() == [expected], "the lock does not hold exactly one native coin of the stated amount");
         ensure!(!self.utxo.is_timelocked(), "the coin is time-locked");
         Ok(())
     }
@@ -100,6 +104,21 @@ pub fn locate(note: &HtlcNote, blocks: &[RpcWalletBlock]) -> Option<Located> {
             height: kernel.header.height.into(),
             aocl_index: kernel.body.num_aocl_leafs_prior() + position as u64,
         })
+    })
+}
+
+/// The height of the block among `blocks` that spends the note's coin (at `at`), if any.
+pub fn spent_in(note: &HtlcNote, at: Located, blocks: &[RpcWalletBlock]) -> Option<u64> {
+    let index_set = note.index_set(at.aocl_index);
+    blocks.iter().find_map(|block| {
+        let kernel: BlockKernel = block.kernel.clone().into();
+        kernel
+            .body
+            .transaction_kernel
+            .inputs
+            .iter()
+            .any(|rr| rr.absolute_indices == index_set)
+            .then(|| kernel.header.height.into())
     })
 }
 

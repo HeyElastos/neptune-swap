@@ -313,6 +313,12 @@ fn lock_messages_belong_to_one_deal_and_come_from_the_right_side() {
     got.body.answers(&got.signer, &accept, &quote).unwrap();
     let from_user = decoded(&evm, 1);
     assert!(from_user.body.answers(&from_user.signer, &accept, &quote).is_err(), "only the quoting solver");
+    // When the solver gives NPT (its quote carries the hash lock), the user locks on the
+    // EVM chain and only the user's notice counts.
+    let solver_gives_npt = Decoded { body: Quote { hash_lock: Some(hash_lock()), ..quote.body.clone() }, ..quote.clone() };
+    from_user.body.answers(&from_user.signer, &accept, &solver_gives_npt).unwrap();
+    let got = decoded(&evm, 2);
+    assert!(got.body.answers(&got.signer, &accept, &solver_gives_npt).is_err(), "only the user then");
     let bad = EvmLocked { contract: "0x".to_string() + &"ab".repeat(19), ..evm };
     assert!(decode::<EvmLocked>(&signed(&bad, 2), NOW, Net::Test).is_err(), "contract without 0x, 40 hex");
 }

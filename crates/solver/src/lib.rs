@@ -8,5 +8,6 @@
 #![forbid(unsafe_code)]
 
 pub mod carrier;
+pub mod deal;
 pub mod neptune;
 pub mod roles;

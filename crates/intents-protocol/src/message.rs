@@ -389,13 +389,16 @@ pub struct EvmLocked {
 }
 
 impl EvmLocked {
-    /// Checks that this lock belongs to `accept` and comes from the quoting solver.
+    /// Checks that this lock belongs to `accept` and comes from the NPT receiver: the solver
+    /// when the user gives NPT, the user (the accept's signer) when the solver gives NPT (then
+    /// the quote carries the hash lock).
     pub fn answers(&self, signer: &DidKey, accept: &Decoded<Accept>, quote: &Decoded<Quote>) -> Result<(), Error> {
         if self.deal != accept.digest {
             return Err(Error::invalid("deal", "not this deal's accept"));
         }
-        if *signer != quote.signer {
-            return Err(Error::invalid("signer", "not the solver that quoted"));
+        let npt_receiver = if quote.body.hash_lock.is_some() { &accept.signer } else { &quote.signer };
+        if signer != npt_receiver {
+            return Err(Error::invalid("signer", "not the NPT receiver"));
         }
         Ok(())
     }

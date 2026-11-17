@@ -19,7 +19,7 @@
 use ed25519_dalek::SigningKey;
 use evm_htlc::{hex, parse_address, parse_word, Address, LockView, Word};
 use intents_protocol::{
-    decode, other_refund_at, seal, Accept, Chain, Decoded, DidKey, EvmLocked, Intent, Message, Net, NptLocked, Quote, Signed,
+    decode, may_reveal, other_refund_at, seal, Accept, Chain, Decoded, DidKey, EvmLocked, Intent, Message, Net, NptLocked, Quote, Signed,
     PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
@@ -126,6 +126,17 @@ pub struct Swap {
     /// The provider job proving a Neptune transaction of this swap.
     pub job: Option<String>,
     accepted_at: u64,
+    /// Gives NPT: the claim on Base has gone to Wallet, so the secret counts as revealed.
+    #[serde(default)]
+    pub claim_sent: bool,
+    /// Gets NPT: the NPT claim (or, giving NPT, the refund) was submitted; it counts once
+    /// the lock is seen spent on chain.
+    #[serde(default)]
+    pub submitted_at: Option<u64>,
+    /// The last message sent, sealed and base64url, and when: sent again while the other side
+    /// has not answered (the carrier gives no delivery receipt).
+    #[serde(default)]
+    pub last_sent: Option<(String, u64)>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -173,6 +184,9 @@ impl Swap {
             evm_from_block: None,
             job: None,
             accepted_at: 0,
+            claim_sent: false,
+            submitted_at: None,
+            last_sent: None,
         };
         Ok((swap, sealed))
     }
@@ -195,6 +209,15 @@ impl Swap {
     /// The Base account the swap was accepted with (40 hex, no 0x).
     pub fn account(&self) -> Option<&str> {
         self.account.as_deref()
+    }
+
+    /// The NPT lock's note and the height to search for it from.
+    pub fn npt_note(&self) -> Option<&Value> {
+        self.note.as_ref()
+    }
+
+    pub fn npt_from_height(&self) -> u64 {
+        self.from_height.unwrap_or(0)
     }
 
     pub fn swap_id(&self) -> Option<&str> {
@@ -335,7 +358,7 @@ impl Swap {
 
     /// The solver says where its Base lock is. Only the swap contract counts.
     pub fn on_evm_locked(&mut self, bytes: &[u8], now: u64) -> Result<(), String> {
-        if self.step != Step::AwaitEvmLock {
+        if !matches!(self.step, Step::AwaitEvmLock | Step::CheckEvmLock) {
             return Err("not waiting for a Base lock".into());
         }
         let locked: Decoded<EvmLocked> = decode(bytes, now, self.net()).map_err(|e| e.to_string())?;
@@ -370,10 +393,12 @@ impl Swap {
     pub fn check_evm_lock(&mut self, view: &LockView, confirmations: u64, now: u64) -> Result<bool, String> {
         let neptune_refund = self.neptune_refund_ms.ok_or("no NPT lock")? / 1000;
         if let Err(why) = evm_leg::check_lock(view, &self.expected_evm_lock()?, self.other(), neptune_refund, now) {
+            // Not claimed, ever, unless a corrected lock comes; the NPT comes back at its timeout.
             self.line = format!("{why} Not claiming; your NPT comes back after its timeout.");
-            self.step = Step::AwaitEvmLock;
+            self.step = Step::CheckEvmLock;
             return Err(why);
         }
+        self.evm_refund_after = Some(view.refund_after);
         if confirmations < EVM_CONFIRMATIONS {
             self.line = format!("The solver's lock is good; waiting for confirmations ({confirmations}/{EVM_CONFIRMATIONS}).");
             return Ok(false);
@@ -381,6 +406,23 @@ impl Swap {
         self.step = Step::Claiming;
         self.line = "Claiming on Base: approve it in the Wallet app.".into();
         Ok(true)
+    }
+
+    /// Right before the claim goes to Wallet: the lock as read now must still be the agreed
+    /// one with time to claim safely. Then `claim_sent` is set (save the swap before sending):
+    /// from here the secret counts as revealed and the claim is retried, never re-checked.
+    pub fn ready_to_reveal(&mut self, view: &LockView, now: u64) -> Result<(), String> {
+        if self.claim_sent {
+            return Ok(());
+        }
+        let neptune_refund = self.neptune_refund_ms.ok_or("no NPT lock")? / 1000;
+        if let Err(why) = evm_leg::check_lock(view, &self.expected_evm_lock()?, self.other(), neptune_refund, now) {
+            self.step = Step::CheckEvmLock;
+            self.line = format!("{why} Not claiming; your NPT comes back after its timeout.");
+            return Err(why);
+        }
+        self.claim_sent = true;
+        Ok(())
     }
 
     /// The claim on Base with the secret (from the provider's `htlc_secret`). From the moment
@@ -483,10 +525,42 @@ impl Swap {
         let body = EvmLocked { v: PROTOCOL_VERSION, deal: self.accept_msg()?.digest, contract: no0x(&evm_htlc::HTLC_ADDRESS), id: hex(&id)[2..].to_string() };
         let (_, sealed) = self.sign_and_seal(&body, &self.solver.clone(), now)?;
         self.evm_id = Some(hex(&id)[2..].to_string());
-        self.evm_from_block = Some(block);
+        self.evm_from_block = Some(self.evm_from_block.map_or(block, |b| b.min(block)));
         self.step = Step::AwaitSecret;
         self.line = "Locked on Base. Waiting for the solver to claim it, which reveals the secret.".into();
         Ok(sealed)
+    }
+
+    /// The Base block to search for this swap's events from: kept before anything is sent, so
+    /// a reload never searches from too late.
+    pub fn watch_from(&mut self, block: u64) {
+        if self.evm_from_block.is_none() {
+            self.evm_from_block = Some(block);
+        }
+    }
+
+    /// Whether the planned Base lock still leaves the chain's least lock time before its refund.
+    pub fn evm_lock_in_time(&self, now: u64) -> bool {
+        self.evm_refund_after.is_some_and(|at| now.saturating_add(self.other().min_lock_secs()) <= at)
+    }
+
+    /// A sealed message just sent, kept to send again while there is no answer.
+    pub fn sent(&mut self, sealed: &[u8], now: u64) {
+        use base64::Engine as _;
+        self.last_sent = Some((base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sealed), now));
+    }
+
+    /// The last message again when it went out more than `every` seconds ago and the swap still
+    /// waits for the other side's answer to it.
+    pub fn resend_due(&mut self, now: u64, every: u64) -> Option<Vec<u8>> {
+        use base64::Engine as _;
+        let waiting = matches!(self.step, Step::Asked | Step::AwaitEvmLock | Step::AwaitNptLock | Step::AwaitSecret);
+        let (text, at) = self.last_sent.clone()?;
+        if !waiting || now < at + every {
+            return None;
+        }
+        self.last_sent = Some((text.clone(), now));
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(text).ok()
     }
 
     pub fn evm_from_block(&self) -> u64 {
@@ -541,6 +615,11 @@ impl Swap {
             Step::Asked if now > self.intent.body.expires_at => self.fail("No quote came before the request expired. Nothing was locked."),
             Step::Quoted if quote_expiry.is_some_and(|at| now > at) => self.fail("The quote expired before it was accepted. Nothing was locked."),
             Step::Accepted if quote_expiry.is_some_and(|at| now > at) => self.fail("The quote expired before your NPT was locked. Nothing was locked."),
+            // Not sent yet, and too late to reveal safely: back to waiting for the NPT refund.
+            Step::Claiming if !self.claim_sent && self.evm_refund_after.is_some_and(|at| !may_reveal(self.other(), at, now)) => {
+                self.step = Step::CheckEvmLock;
+                self.line = "Too late to claim on Base safely. Your NPT comes back after its timeout.".into();
+            }
             Step::AwaitEvmLock | Step::CheckEvmLock if self.neptune_refund_ms.is_some_and(|ms| now * 1000 >= ms) => {
                 self.step = Step::RefundingNpt;
                 self.line = "The solver did not lock in time. Taking your NPT back.".into();
@@ -690,10 +769,20 @@ mod tests {
         assert_eq!(swap.step, Step::CheckEvmLock);
         view.amount -= 1;
         assert!(swap.check_evm_lock(&view, 50, NOW).unwrap_err().contains("amount"));
-        assert_eq!(swap.step, Step::AwaitEvmLock, "a bad lock is never claimed");
-        swap.step = Step::CheckEvmLock;
+        assert_eq!(swap.step, Step::CheckEvmLock, "a bad lock is never claimed");
         view.amount += 1;
         assert_eq!(swap.check_evm_lock(&view, EVM_CONFIRMATIONS, NOW), Ok(true));
+        assert_eq!(swap.step, Step::Claiming);
+        // Right before revealing, the lock is read again: spent or late means no claim.
+        let spent = LockView { spent: true, ..view.clone() };
+        assert!(swap.ready_to_reveal(&spent, NOW).is_err());
+        assert_eq!((swap.step, swap.claim_sent), (Step::CheckEvmLock, false));
+        swap.step = Step::Claiming;
+        assert!(swap.ready_to_reveal(&view, NOW + 2 * H).is_err(), "no time left to claim safely");
+        swap.step = Step::Claiming;
+        swap.ready_to_reveal(&view, NOW).unwrap();
+        assert!(swap.claim_sent);
+        assert!(swap.ready_to_reveal(&spent, NOW + 3 * H).is_ok(), "once sent, keep claiming");
         assert!(swap.claim_tx(&[4; 32]).unwrap_err().contains("does not open"));
         let claim = swap.claim_tx(&secret).unwrap();
         assert_eq!(claim.to, evm_htlc::HTLC_ADDRESS);
@@ -762,8 +851,36 @@ mod tests {
         // While claiming, time never turns the swap into a refund: the secret may be out.
         let mut claiming = started(true);
         claiming.step = Step::Claiming;
+        claiming.claim_sent = true;
         claiming.neptune_refund_ms = Some(NOW * 1000);
+        claiming.evm_refund_after = Some(NOW + H);
         assert!(!claiming.tick(NOW + 10 * H));
+        // Not sent yet and too late to reveal: back to waiting, then the NPT refund.
+        let mut late = started(true);
+        late.step = Step::Claiming;
+        late.evm_refund_after = Some(NOW + H);
+        late.neptune_refund_ms = Some((NOW + 5 * H) * 1000);
+        assert!(late.tick(NOW + 1));
+        assert_eq!(late.step, Step::CheckEvmLock);
+        assert!(late.tick(NOW + 5 * H));
+        assert_eq!(late.step, Step::RefundingNpt);
+    }
+
+    #[test]
+    fn messages_are_sent_again_while_unanswered_and_late_locks_are_not_made() {
+        let mut swap = started(false);
+        swap.sent(b"sealed", NOW);
+        assert_eq!(swap.resend_due(NOW + 60, 120), None);
+        assert_eq!(swap.resend_due(NOW + 120, 120), Some(b"sealed".to_vec()));
+        assert_eq!(swap.resend_due(NOW + 121, 120), None, "the clock restarts");
+        swap.step = Step::Done;
+        assert_eq!(swap.resend_due(NOW + 1000, 120), None);
+        swap.evm_refund_after = Some(NOW + 2 * H);
+        assert!(swap.evm_lock_in_time(NOW));
+        assert!(!swap.evm_lock_in_time(NOW + 1));
+        swap.watch_from(500);
+        swap.watch_from(900);
+        assert_eq!(swap.evm_from_block(), 500, "the first watch point stays");
     }
 
     #[test]

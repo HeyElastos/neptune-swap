@@ -76,27 +76,26 @@ short; later, bonds.
 script, the EVM precompile and Solana all have SHA-256, so one hashlock works against
 all of them.
 
-## Resume here (2026-11-17)
+## Resume here (2026-11-17, evening)
 
-Done today: the EVM leg's building blocks (see "EVM leg" below): Base in the protocol, the
-contract at one address fixed by its creation code (CREATE2), `crates/intents-ui/src/evm_leg.rs` (Wallet bridge
-transactions, chain reads, lock checks, the secret from `Claimed` logs), the form on Base,
-and a runtime fork change that lets the app make typed chain reads. Not yet: the swap flow
-that drives these steps in the app (taker first), and a live run in the dev Home.
+Built: the swap in the app, both directions (engine `crates/intents-ui/src/swap.rs`, driver
+`swap_ui.rs`, swap card, Send to solver), the provider's swap operations (background
+proving, `htlc_check`, `htlc_spent`, an idempotent `htlc_lock`, the journal), a native solver
+that answers apps over the carrier (`crates/solver/src/deal.rs`, `bin/solver-daemon.rs`),
+and an end-to-end test of the app's engine against the solver on regtest and anvil
+(`crates/intents-ui/tests/swap_e2e.rs`). An independent review of the flow found fund-loss
+paths; all fixed (docs/swap-safety.md, section 6b).
 
-Next, in order:
-1. **Taker flow in the app** (Review → Send to solvers): seal the intent to the offer's
-   solver, take the quote, accept, then per direction: user gives USDC/ETH → check the
-   solver's NPT lock (a provider op `htlc_check` against the agreed terms, so the capsule
-   needs no neptune-core), lock on Base, wait for the solver's claim, read the secret, claim
-   the NPT; refund on Base when the solver never claims. User gives NPT → lock NPT, check the
-   solver's Base lock (`evm_leg::check_lock`, contract code first), claim it.
-2. **Solver side in the app** (Offer page answers sealed intents).
-3. **Live run in the dev Home**: rebuild the fork (`cargo build --release -p elastos-server
-   --bin elastos`), restart `scripts/dev-home.sh`, a local anvil chain as Base with the
-   contract deployed (`scripts/evm-htlc-local.sh`), the native solver as counterparty.
-4. **ELA main chain** (below): the Neptune lock script with a revealing claim, P-256 in tasm.
-5. **Provider vaults** (below).
+Next:
+1. **Live run in the dev Home**: rebuild the runtime fork, `scripts/install-dev-home.sh`,
+   `scripts/dev-home.sh`, anvil + `scripts/deploy-htlc-local.sh`, the solver daemon with a
+   config (see its doc comment) on the dev Home's managed runtime; then a swap from the app.
+   Whether the gateway's carrier node and the managed runtime's node reach each other is
+   still unchecked (docs/carrier-route.md).
+2. **USDC on a local chain**: a mock token at Circle's Base address (`anvil_setCode`) for tests.
+3. **Open safety items**: the chain's own clock for timeouts, confirmations from the lock's
+   own block, Neptune fees that follow the network, fee bumps on Base.
+4. **ELA main chain** (design below) and **provider vaults**.
 
 ## Paused 2026-11-16 evening (kept for reference)
 

@@ -1,8 +1,12 @@
-//! Runs a swap from the page: carries out what each step of the engine (`swap.rs`) needs
+//! Runs swaps from the page: carries out what each step of the engine (`swap.rs`) needs
 //! (provider calls, Wallet transactions, chain reads, sealed messages on the deals topic),
-//! feeds the answers back, keeps the swap in the provider's journal after every change, and
-//! shows it in the swap card. One swap at a time; an open one is picked up again when the
-//! page opens.
+//! feeds the answers back, keeps every swap in the provider's journal after every change, and
+//! shows the newest in the swap card. Every open swap in the journal is driven when the page
+//! opens, not only the newest: any of them may hold funds.
+//!
+//! Two rules from the security review shape the steps below: nothing that may hold the other
+//! side's money is given up without first looking for the secret on Base, and a Neptune claim
+//! or refund counts only once the lock is seen spent on chain.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -16,22 +20,29 @@ use crate::evm_leg::{self, Account};
 use crate::swap::{Step, Swap};
 use crate::{intent, offers_ui, runtime, wallet_ui, AppWindow, StepRow};
 
-/// How often the swap looks for news while it waits.
+/// How often swaps look for news while they wait.
 const POLL_MS: u32 = 5_000;
-/// Longer pause after an error, before trying the step again.
+/// Longer pause after an error, before trying again.
 const RETRY_MS: u32 = 30_000;
+/// A message without an answer goes out again after this long.
+const RESEND_SECS: u64 = 120;
+/// A submitted Neptune claim or refund not seen on chain after this long is submitted again.
+const RESUBMIT_SECS: u64 = 20 * 60;
 
 struct Ctx {
     token: Option<String>,
     account: Rc<RefCell<Option<Account>>>,
-    swap: Option<Swap>,
+    /// Every swap this page knows of; the last is the one the card shows.
+    swaps: Vec<Swap>,
     running: bool,
+    /// Why the journal could not be read or written, for the card.
+    trouble: Option<String>,
 }
 
 type Shared = Rc<RefCell<Ctx>>;
 
 pub fn wire(app: &AppWindow, token: Option<String>, account: Rc<RefCell<Option<Account>>>) {
-    let state: Shared = Rc::new(RefCell::new(Ctx { token, account, swap: None, running: false }));
+    let state: Shared = Rc::new(RefCell::new(Ctx { token, account, swaps: vec![], running: false, trouble: None }));
     {
         let (weak, state) = (app.as_weak(), state.clone());
         app.on_send_swap(move || crate::spawn(send(weak.clone(), state.clone())));
@@ -40,10 +51,11 @@ pub fn wire(app: &AppWindow, token: Option<String>, account: Rc<RefCell<Option<A
         let (weak, state) = (app.as_weak(), state.clone());
         app.on_swap_dismiss(move || {
             let mut s = state.borrow_mut();
-            if s.swap.as_ref().is_some_and(|w| !w.open_ended()) {
-                s.swap = None;
-                weak.unwrap().set_swap_on(false);
+            if s.swaps.last().is_some_and(|w| !w.open_ended()) {
+                s.swaps.pop();
             }
+            drop(s);
+            render(&weak.unwrap(), &state);
         });
     }
     {
@@ -75,7 +87,7 @@ async fn send(weak: Weak<AppWindow>, state: Shared) {
     let token = state.borrow().token.clone();
     let account = state.borrow().account.borrow().clone();
     let (ready, why) = send_state(&app, account.as_ref(), token.is_some());
-    if !ready || state.borrow().swap.as_ref().is_some_and(Swap::open_ended) {
+    if !ready || state.borrow().swaps.iter().any(Swap::open_ended) {
         app.set_form_error(if ready { "Finish the swap in progress first.".to_string() } else { why }.into());
         return;
     }
@@ -97,27 +109,32 @@ async fn send(weak: Weak<AppWindow>, state: Shared) {
         return app.set_form_error("No randomness for the one-time DID.".into());
     }
     let main_net = network == "neptune-main";
-    let (swap, sealed) = match Swap::start(built, &solver, main_net, seed, now) {
+    let (mut swap, sealed) = match Swap::start(built, &solver, main_net, seed, now) {
         Ok(started) => started,
         Err(e) => return app.set_form_error(e.into()),
     };
     app.set_review_open(false);
     drop(app);
-    if let Err(e) = deliver(&token, main_net, &sealed).await {
+    // Kept before it is sent: a swap the solver may answer is never lost.
+    if let Err(e) = save(&token, &network, &swap).await {
         if let Some(app) = weak.upgrade() {
-            app.set_form_error(format!("Could not reach the carrier: {e}").into());
+            app.set_form_error(format!("Could not keep the swap: {e}").into());
         }
         return;
     }
+    if let Err(e) = deliver(&token, main_net, &sealed).await {
+        swap.line = format!("Could not reach the carrier ({e}); trying again.");
+    }
+    swap.sent(&sealed, now);
     let _ = save(&token, &network, &swap).await;
-    state.borrow_mut().swap = Some(swap);
+    state.borrow_mut().swaps.push(swap);
     if let Some(app) = weak.upgrade() {
         render(&app, &state);
     }
     run(weak, state, network, token).await;
 }
 
-/// Picks up the newest open swap from the journal (after the page was closed).
+/// Picks up every open swap from the journal (after the page was closed).
 async fn resume(weak: Weak<AppWindow>, state: Shared) {
     let Some(app) = weak.upgrade() else { return };
     let (Some(network), Some(token)) = (wallet_ui::network(&app), state.borrow().token.clone()) else { return };
@@ -125,17 +142,31 @@ async fn resume(weak: Weak<AppWindow>, state: Shared) {
     if state.borrow().running {
         return;
     }
-    let Ok(list) = runtime::provider("swap_list", &json!({ "network": network }), &token).await else { return };
-    let mut open: Vec<Swap> = list["swaps"]
-        .as_object()
-        .into_iter()
-        .flatten()
-        .filter_map(|(_, v)| serde_json::from_value::<Swap>(v.clone()).ok())
-        .filter(Swap::open_ended)
-        .collect();
-    open.sort_by_key(|s| std::cmp::Reverse(s.intent().expires_at));
-    let Some(swap) = open.into_iter().next() else { return };
-    state.borrow_mut().swap = Some(swap);
+    let list = match runtime::provider("swap_list", &json!({ "network": network }), &token).await {
+        Ok(list) => list,
+        Err(e) => {
+            state.borrow_mut().trouble = Some(format!("Could not read your swaps: {}", e.message));
+            return;
+        }
+    };
+    let records = list["swaps"].as_object().cloned().unwrap_or_default();
+    let mut unreadable = 0;
+    let mut open: Vec<Swap> = vec![];
+    for (_, record) in records {
+        match serde_json::from_value::<Swap>(record) {
+            Ok(swap) if swap.open_ended() => open.push(swap),
+            Ok(_) => {}
+            Err(_) => unreadable += 1,
+        }
+    }
+    if unreadable > 0 {
+        state.borrow_mut().trouble = Some(format!("{unreadable} kept swap record(s) could not be read by this version of the app."));
+    }
+    if open.is_empty() {
+        return;
+    }
+    open.sort_by_key(|s| s.intent().expires_at);
+    state.borrow_mut().swaps = open;
     if let Some(app) = weak.upgrade() {
         render(&app, &state);
     }
@@ -150,25 +181,26 @@ async fn deliver(token: &str, main_net: bool, sealed: &[u8]) -> Result<(), Strin
     Ok(())
 }
 
-/// The messages on the deals topic sealed to this swap, opened.
-async fn inbox(token: &str, swap: &Swap) -> Result<Vec<Vec<u8>>, String> {
-    let topic = deals_topic(swap.main_net);
+/// Sends `sealed` and keeps it to send again while there is no answer.
+async fn tell(token: &str, swap: &mut Swap, sealed: &[u8], now: u64) -> Result<(), String> {
+    swap.sent(sealed, now);
+    deliver(token, swap.main_net, sealed).await
+}
+
+/// Everything new on the deals topic (each read consumes it): shared by all open swaps.
+async fn inbox(token: &str, main_net: bool) -> Result<Vec<Vec<u8>>, String> {
+    let topic = deals_topic(main_net);
     offers_ui::join(topic, token).await?;
-    let mut opened = vec![];
+    let mut all = vec![];
     for _ in 0..10 {
         let reply = runtime::peer("gossip_recv", &json!({ "topic": topic, "limit": 50 }), token).await.map_err(|e| e.message)?;
         let messages = reply["messages"].as_array().cloned().unwrap_or_default();
-        for m in &messages {
-            let Some(bytes) = m["content"].as_str().and_then(|c| URL_SAFE_NO_PAD.decode(c).ok()) else { continue };
-            if let Some(plain) = swap.open(&bytes) {
-                opened.push(plain);
-            }
-        }
+        all.extend(messages.iter().filter_map(|m| URL_SAFE_NO_PAD.decode(m["content"].as_str()?).ok()));
         if messages.len() < 50 {
             break;
         }
     }
-    Ok(opened)
+    Ok(all)
 }
 
 async fn save(token: &str, network: &str, swap: &Swap) -> Result<(), String> {
@@ -197,50 +229,72 @@ fn namespace(swap: &Swap) -> Result<&'static str, String> {
     evm_leg::namespace(swap.intent().other_chain()).ok_or("elastOS Wallet cannot pay on that chain.".into())
 }
 
-/// Where a provider job stands: Some(Ok) when sent, Some(Err) when it failed, None while proving.
+/// Where a provider job stands: Some(Ok) when sent, Some(Err) when it failed, None while
+/// proving or when the provider no longer knows it (then the chain decides).
 async fn job(network: &str, job: &str, token: &str) -> Option<Result<(), String>> {
     match provider("job_status", network, json!({ "job": job }), token).await {
         Ok(v) if v["state"] == "sent" => Some(Ok(())),
         Ok(v) if v["state"] == "failed" => Some(Err(v["message"].as_str().unwrap_or("failed").to_string())),
-        Ok(_) => None,
-        Err(e) => Some(Err(e)),
+        _ => None,
     }
 }
 
-/// The loop: one step at a time until the swap is done or failed. Every change is saved.
+/// The loop: every open swap, one step each per pass, until none is open. Every change is saved.
 async fn run(weak: Weak<AppWindow>, state: Shared, network: String, token: String) {
     if std::mem::replace(&mut state.borrow_mut().running, true) {
         return;
     }
-    // Base blocks when the solver's lock was first seen good (not kept: a reload counts again).
-    let mut seen_at: Option<u64> = None;
+    // Base blocks at which each swap's counter-lock was first seen good (a reload counts again).
+    let mut seen_at: std::collections::HashMap<String, u64> = Default::default();
     loop {
-        let Some(mut swap) = state.borrow().swap.clone() else { break };
-        let before = swap.clone();
+        let swaps = state.borrow().swaps.clone();
+        if !swaps.iter().any(Swap::open_ended) {
+            break;
+        }
         let now = runtime::now_secs();
-        swap.tick(now);
-        let outcome = step(&weak, &state, &mut swap, &network, &token, &mut seen_at, now).await;
-        if let Err(e) = &outcome {
-            swap.line = e.clone();
+        // One read of the deals topic for all swaps of each network kind.
+        let mut mail: Vec<Vec<u8>> = vec![];
+        for main_net in [false, true] {
+            if swaps.iter().any(|s| s.open_ended() && s.main_net == main_net) {
+                mail.extend(inbox(&token, main_net).await.unwrap_or_default());
+            }
         }
-        if swap != before {
-            let _ = save(&token, &network, &swap).await;
+        let mut trouble = false;
+        let mut updated = vec![];
+        for mut swap in swaps {
+            if !swap.open_ended() {
+                updated.push(swap);
+                continue;
+            }
+            let before = swap.clone();
+            swap.tick(now);
+            let mine: Vec<Vec<u8>> = mail.iter().filter_map(|m| swap.open(m)).collect();
+            if let Err(e) = step(&weak, &state, &mut swap, &network, &token, &mine, &mut seen_at, now).await {
+                swap.line = e;
+                trouble = true;
+            }
+            if let Some(again) = swap.resend_due(now, RESEND_SECS) {
+                let _ = deliver(&token, swap.main_net, &again).await;
+            }
+            if swap != before {
+                if let Err(e) = save(&token, &network, &swap).await {
+                    swap.line = format!("Could not keep this swap's progress ({e}); trying again.");
+                    trouble = true;
+                }
+            }
+            updated.push(swap);
         }
-        let open = swap.open_ended();
-        state.borrow_mut().swap = Some(swap);
+        state.borrow_mut().swaps = updated;
         match weak.upgrade() {
             Some(app) => render(&app, &state),
             None => break,
         }
-        if !open {
-            break;
-        }
-        runtime::sleep_ms(if outcome.is_err() { RETRY_MS } else { POLL_MS }).await;
+        runtime::sleep_ms(if trouble { RETRY_MS } else { POLL_MS }).await;
     }
     state.borrow_mut().running = false;
 }
 
-/// One pass over the current step.
+/// One pass over a swap's current step. `mine` are the messages sealed to it.
 #[allow(clippy::too_many_arguments)]
 async fn step(
     weak: &Weak<AppWindow>,
@@ -248,7 +302,8 @@ async fn step(
     swap: &mut Swap,
     network: &str,
     token: &str,
-    seen_at: &mut Option<u64>,
+    mine: &[Vec<u8>],
+    seen_at: &mut std::collections::HashMap<String, u64>,
     now: u64,
 ) -> Result<(), String> {
     let waiting = |line: String| {
@@ -258,8 +313,8 @@ async fn step(
     };
     match swap.step {
         Step::Asked => {
-            for m in inbox(token, swap).await? {
-                if swap.on_quote(&m, now).is_ok() {
+            for m in mine {
+                if swap.on_quote(m, now).is_ok() {
                     break;
                 }
             }
@@ -275,68 +330,73 @@ async fn step(
                 return Err("The provider made no swap secret.".into());
             }
             let sealed = swap.accept(&claim_lock, index, prepared_ref, &account.address, now)?;
-            deliver(token, swap.main_net, &sealed).await?;
+            tell(token, swap, &sealed, now).await?;
         }
         Step::Accepted => {
             let npt = intent::ASSETS.iter().find(|a| a.symbol == "NPT").ok_or("no NPT")?;
             let text = offers_ui::to_text(swap.intent().give_amount.units(), npt);
             let request = swap.npt_lock_request(&text, now)?;
+            // The provider answers a repeated request for this swap with the same lock.
             let reply = provider("htlc_lock", network, request, token).await?;
             swap.npt_lock_started(&reply)?;
         }
         Step::LockingNpt => {
-            let done = match swap.job.clone() {
-                Some(id) => job(network, &id, token).await,
-                // The job is gone (the provider restarted): is the lock on chain?
-                None => {
-                    let found = provider("htlc_status", network, json!({ "swap_id": swap.swap_id() }), token).await?;
-                    (found["found"] == true).then_some(Ok(()))
-                }
+            let sent = match swap.job.clone() {
+                Some(id) => match job(network, &id, token).await {
+                    Some(Ok(())) => true,
+                    Some(Err(e)) => {
+                        swap.job = None;
+                        return Err(format!("Proving the NPT lock failed ({e}); checking the chain."));
+                    }
+                    None => false,
+                },
+                None => provider("htlc_status", network, json!({ "swap_id": swap.swap_id() }), token).await?["found"] == true,
             };
-            match done {
-                Some(Ok(())) => {
-                    let sealed = swap.npt_lock_sent(now)?;
-                    deliver(token, swap.main_net, &sealed).await?;
-                }
-                Some(Err(e)) if swap.job.is_some() => {
-                    swap.job = None;
-                    return Err(format!("The NPT lock was not sent ({e}). Checking the chain again."));
-                }
-                _ => {}
+            if sent {
+                let sealed = swap.npt_lock_sent(now)?;
+                tell(token, swap, &sealed, now).await?;
             }
         }
-        Step::AwaitEvmLock => {
-            for m in inbox(token, swap).await? {
-                if swap.on_evm_locked(&m, now).is_ok() {
+        Step::AwaitEvmLock | Step::CheckEvmLock => {
+            for m in mine {
+                if swap.on_evm_locked(m, now).is_ok() {
+                    seen_at.remove(&swap.id);
                     break;
                 }
             }
-        }
-        Step::CheckEvmLock => {
-            let ns = namespace(swap)?;
-            evm_leg::check_contract(ns, token).await?;
-            let id = swap.evm_id().ok_or("no Base lock")?;
-            let view = evm_leg::lock_view(ns, &id, token).await?;
-            let latest = evm_leg::latest_block(ns, token).await?;
-            let first = *seen_at.get_or_insert(latest);
-            if swap.check_evm_lock(&view, latest.saturating_sub(first), now).is_err() {
-                *seen_at = None;
+            if swap.step == Step::CheckEvmLock {
+                let ns = namespace(swap)?;
+                evm_leg::check_contract(ns, token).await?;
+                let id = swap.evm_id().ok_or("no Base lock")?;
+                let latest = evm_leg::latest_block(ns, token).await?;
+                swap.watch_from(latest.saturating_sub(evm_leg::LOG_PAGE));
+                let view = evm_leg::lock_view(ns, &id, token).await?;
+                let first = *seen_at.entry(swap.id.clone()).or_insert(latest);
+                if swap.check_evm_lock(&view, latest.saturating_sub(first), now).is_err() {
+                    seen_at.remove(&swap.id);
+                }
             }
         }
         Step::Claiming => {
             let ns = namespace(swap)?;
             let id = swap.evm_id().ok_or("no Base lock")?;
-            if evm_leg::lock_view(ns, &id, token).await?.spent {
+            let view = evm_leg::lock_view(ns, &id, token).await?;
+            if view.spent {
                 // Spent by a claim (a Claimed log under this hash lock) or by the solver's refund.
                 let hash_lock = swap.hash_lock().ok_or("no hash lock")?;
-                let from = evm_leg::latest_block(ns, token).await?.saturating_sub(evm_leg::LOG_PAGE * 5);
-                if evm_leg::claimed_secret(ns, &id, &hash_lock, from, token).await?.is_some() {
+                if evm_leg::claimed_secret(ns, &id, &hash_lock, swap.evm_from_block(), token).await?.is_some() {
                     swap.finish(format!("Swap complete: {} is in your Wallet account.", swap.want_label()));
                 } else {
-                    swap.step = Step::RefundingNpt;
-                    swap.line = "The solver took its Base lock back. Taking your NPT back after its timeout.".into();
+                    // Refunded by the solver: wait for the NPT refund at its timeout.
+                    swap.step = Step::CheckEvmLock;
+                    swap.line = "The solver took its Base lock back. Your NPT comes back after its timeout.".into();
                 }
                 return Ok(());
+            }
+            // Re-checked right before the secret leaves; kept as sent before it is sent.
+            if !swap.claim_sent {
+                swap.ready_to_reveal(&view, now)?;
+                save(token, network, swap).await?;
             }
             let account = account_for(state, swap)?;
             let secret = provider("htlc_secret", network, json!({ "swap_id": swap.swap_id() }), token).await?;
@@ -345,91 +405,119 @@ async fn step(
             evm_leg::send(ns, &account, &tx, token, &waiting).await?;
             swap.finish(format!("Swap complete: {} is in your Wallet account.", swap.want_label()));
         }
-        Step::AwaitNptLock => {
-            for m in inbox(token, swap).await? {
-                if let Ok(request) = swap.on_npt_locked(&m, now) {
-                    let reply = provider("htlc_check", network, request, token).await?;
-                    swap.npt_checked(&reply, now)?;
-                    break;
+        Step::AwaitNptLock | Step::CheckNptLock => {
+            if swap.step == Step::AwaitNptLock {
+                for m in mine {
+                    if let Ok(request) = swap.on_npt_locked(m, now) {
+                        let reply = provider("htlc_check", network, request, token).await?;
+                        swap.npt_checked(&reply, now)?;
+                        break;
+                    }
                 }
+            } else {
+                let reply = provider("htlc_check", network, swap.npt_check_request()?, token).await?;
+                swap.npt_checked(&reply, now)?;
             }
-        }
-        Step::CheckNptLock => {
-            let reply = provider("htlc_check", network, swap.npt_check_request()?, token).await?;
-            swap.npt_checked(&reply, now)?;
         }
         Step::LockingEvm => {
             let ns = namespace(swap)?;
             evm_leg::check_contract(ns, token).await?;
-            let account = account_for(state, swap)?;
             let id = swap.planned_evm_id()?;
             // Landed already (the page closed before it could say so)?
             if evm_leg::lock_view(ns, &id, token).await?.sender != [0; 20] {
-                let from = evm_leg::latest_block(ns, token).await?.saturating_sub(evm_leg::LOG_PAGE * 5);
-                let sealed = swap.evm_lock_sent(from, now)?;
-                deliver(token, swap.main_net, &sealed).await?;
+                let sealed = swap.evm_lock_sent(swap.evm_from_block(), now)?;
+                tell(token, swap, &sealed, now).await?;
                 return Ok(());
             }
+            if !swap.evm_lock_in_time(now) {
+                swap.step = Step::Failed;
+                swap.line = "Too late to lock on Base safely; nothing of yours was locked there. The solver's NPT goes back to it.".into();
+                return Ok(());
+            }
+            let account = account_for(state, swap)?;
+            // Where to look for the solver's claim from, kept before the lock goes out.
+            swap.watch_from(evm_leg::latest_block(ns, token).await?);
+            save(token, network, swap).await?;
             let mut block = 0;
             for tx in swap.evm_lock_txs()? {
                 block = evm_leg::send(ns, &account, &tx, token, &waiting).await?.block;
             }
             let sealed = swap.evm_lock_sent(block, now)?;
-            deliver(token, swap.main_net, &sealed).await?;
+            tell(token, swap, &sealed, now).await?;
         }
-        Step::AwaitSecret => {
+        Step::AwaitSecret | Step::RefundingEvm => {
             let ns = namespace(swap)?;
             let (id, hash_lock) = (swap.evm_id().ok_or("no Base lock")?, swap.hash_lock().ok_or("no hash lock")?);
+            // Always look for the secret first: a claim in the last block before the refund
+            // time still pays the solver, so the NPT must be claimed.
             if let Some(secret) = evm_leg::claimed_secret(ns, &id, &hash_lock, swap.evm_from_block(), token).await? {
                 let request = swap.npt_claim_request(&secret)?;
                 let reply = provider("htlc_claim", network, request, token).await?;
                 swap.job = reply["job"].as_str().map(str::to_string);
+                swap.submitted_at = Some(now);
+                return Ok(());
+            }
+            if swap.step == Step::RefundingEvm {
+                if evm_leg::lock_view(ns, &id, token).await?.spent {
+                    swap.finish(format!("{} is back in your Wallet account. The swap did not happen.", swap.give_label()));
+                    return Ok(());
+                }
+                let account = account_for(state, swap)?;
+                evm_leg::send(ns, &account, &swap.evm_refund_tx()?, token, &waiting).await?;
+                swap.finish(format!("{} is back in your Wallet account. The swap did not happen.", swap.give_label()));
             }
         }
-        Step::ClaimingNpt => match swap.job.clone() {
-            Some(id) => match job(network, &id, token).await {
-                Some(Ok(())) => swap.finish(format!("Swap complete: {} is on its way to your Neptune wallet.", swap.want_label())),
-                Some(Err(e)) => {
-                    swap.job = None;
-                    return Err(format!("The NPT claim failed ({e}); trying again."));
+        Step::ClaimingNpt => {
+            if let Some(id) = swap.job.clone() {
+                match job(network, &id, token).await {
+                    None => return Ok(()),
+                    Some(Ok(())) => swap.job = None,
+                    Some(Err(e)) => {
+                        swap.job = None;
+                        swap.submitted_at = None;
+                        swap.line = format!("The NPT claim failed ({e}); trying again.");
+                    }
                 }
-                None => {}
-            },
-            None => {
-                // Claim again: the secret is public on Base.
+            }
+            let note = swap.npt_note().ok_or("no lock note")?;
+            let spent = provider("htlc_spent", network, json!({ "note": note, "from_height": swap.npt_from_height() }), token).await?;
+            if spent["spent"] == true {
+                swap.finish(format!("Swap complete: {} is in your Neptune wallet.", swap.want_label()));
+                return Ok(());
+            }
+            if swap.submitted_at.is_none_or(|at| now >= at + RESUBMIT_SECS) {
+                // Claim (again): the secret is public on Base.
                 let ns = namespace(swap)?;
                 let (id, hash_lock) = (swap.evm_id().ok_or("no Base lock")?, swap.hash_lock().ok_or("no hash lock")?);
                 let secret = evm_leg::claimed_secret(ns, &id, &hash_lock, swap.evm_from_block(), token).await?.ok_or("The secret is not on Base yet.")?;
                 let request = swap.npt_claim_request(&secret)?;
                 let reply = provider("htlc_claim", network, request, token).await?;
                 swap.job = reply["job"].as_str().map(str::to_string);
+                swap.submitted_at = Some(now);
             }
-        },
-        Step::RefundingNpt => match swap.job.clone() {
-            Some(id) => match job(network, &id, token).await {
-                Some(Ok(())) => swap.finish("Your NPT is back in your wallet. The swap did not happen."),
-                Some(Err(e)) => {
-                    swap.job = None;
-                    return Err(format!("The NPT refund failed ({e}); trying again."));
+        }
+        Step::RefundingNpt => {
+            if let Some(id) = swap.job.clone() {
+                match job(network, &id, token).await {
+                    None => return Ok(()),
+                    Some(Ok(())) => swap.job = None,
+                    Some(Err(e)) => {
+                        swap.job = None;
+                        swap.submitted_at = None;
+                        swap.line = format!("The NPT refund failed ({e}); trying again.");
+                    }
                 }
-                None => {}
-            },
-            None => {
-                let reply = provider("htlc_refund", network, swap.npt_refund_request()?, token).await?;
-                swap.job = reply["job"].as_str().map(str::to_string);
             }
-        },
-        Step::RefundingEvm => {
-            let ns = namespace(swap)?;
-            let id = swap.evm_id().ok_or("no Base lock")?;
-            if evm_leg::lock_view(ns, &id, token).await?.spent {
-                // Spent: the solver claimed after all (then the secret is public), or refunded.
-                swap.finish("The Base lock is settled. Check your Wallet and Neptune wallet.");
+            let spent = provider("htlc_spent", network, json!({ "swap_id": swap.swap_id() }), token).await?;
+            if spent["spent"] == true {
+                swap.finish("Your NPT is back in your wallet. The swap did not happen.");
                 return Ok(());
             }
-            let account = account_for(state, swap)?;
-            evm_leg::send(ns, &account, &swap.evm_refund_tx()?, token, &waiting).await?;
-            swap.finish(format!("{} is back in your Wallet account. The swap did not happen.", swap.give_label()));
+            if swap.submitted_at.is_none_or(|at| now >= at + RESUBMIT_SECS) {
+                let reply = provider("htlc_refund", network, swap.npt_refund_request()?, token).await?;
+                swap.job = reply["job"].as_str().map(str::to_string);
+                swap.submitted_at = Some(now);
+            }
         }
         Step::Done | Step::Failed => {}
     }
@@ -466,7 +554,7 @@ fn steps(swap: &Swap) -> (Vec<&'static str>, usize) {
 
 fn render(app: &AppWindow, state: &Shared) {
     let s = state.borrow();
-    let Some(swap) = &s.swap else {
+    let Some(swap) = s.swaps.last() else {
         app.set_swap_on(false);
         return;
     };
@@ -485,9 +573,17 @@ fn render(app: &AppWindow, state: &Shared) {
             }),
         })
         .collect();
+    let others = s.swaps.iter().filter(|w| w.open_ended()).count().saturating_sub(usize::from(swap.open_ended()));
+    let mut line = swap.line.clone();
+    if others > 0 {
+        line = format!("{line} ({others} more swap(s) running.)");
+    }
+    if let Some(trouble) = &s.trouble {
+        line = format!("{line} {trouble}");
+    }
     app.set_swap_on(true);
     app.set_swap_title(format!("{} → {}", swap.give_label(), swap.want_label()).into());
-    app.set_swap_line(swap.line.clone().into());
+    app.set_swap_line(line.into());
     app.set_swap_finished(!swap.open_ended());
     app.set_swap_steps(ModelRc::new(VecModel::from(rows)));
 }

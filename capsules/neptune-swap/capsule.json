@@ -86,6 +86,15 @@
           "operation": "htlc_check"
         },
         {
+          "id": "swap.spent",
+          "description": "See whether an NPT swap lock has been spent on chain (claims and refunds count only then)",
+          "risk": "read",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/*",
+          "operation": "htlc_spent"
+        },
+        {
           "id": "swap.secret",
           "description": "The secret of a swap this wallet locks NPT for, to claim the other leg through Wallet",
           "risk": "rights",

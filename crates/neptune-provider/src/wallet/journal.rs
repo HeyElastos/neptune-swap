@@ -32,7 +32,11 @@ impl Wallets {
         ensure!(record.is_object(), "a swap record is an object");
         ensure!(serde_json::to_vec(&record)?.len() <= RECORD_MAX_BYTES, "the swap record is too large");
         let mut journal = self.journal(network_id)?;
-        ensure!(journal.contains_key(id) || journal.len() < RECORDS_MAX, "too many swap records");
+        if !journal.contains_key(id) && journal.len() >= RECORDS_MAX {
+            // Room for a new swap: drop finished ones (never an open one, which may hold funds).
+            journal.retain(|_, r| !matches!(r["step"].as_str(), Some("done" | "failed")));
+        }
+        ensure!(journal.contains_key(id) || journal.len() < RECORDS_MAX, "too many open swap records");
         journal.insert(id.to_string(), record);
         let dir = self.dir(network_id)?;
         fs::create_dir_all(&dir)?;

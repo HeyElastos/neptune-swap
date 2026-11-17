@@ -3,12 +3,12 @@
 //! the same rules.
 
 mod backdrop;
-mod evm_leg;
-mod intent;
+pub mod evm_leg;
+pub mod intent;
 mod offers;
-mod offers_ui;
+pub mod offers_ui;
 mod qr;
-mod swap;
+pub mod swap;
 mod swap_ui;
 mod runtime;
 mod usd;
