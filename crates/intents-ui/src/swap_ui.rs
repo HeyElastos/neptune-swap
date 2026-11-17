@@ -290,7 +290,7 @@ async fn run(weak: Weak<AppWindow>, state: Shared, network: String, token: Strin
             let before = swap.clone();
             swap.tick(now);
             if let Some(chain_now) = chain_now {
-                swap.tick_chain(chain_now);
+                swap.tick_chain(chain_now, now);
             }
             let mine: Vec<Vec<u8>> = mail.iter().filter_map(|m| swap.open(m)).collect();
             if let Err(e) = step(&weak, &state, &mut swap, &network, &token, &mine, chain_now, now).await {
@@ -403,10 +403,18 @@ async fn step(
                 evm_leg::check_contract(ns, token).await?;
                 let id = swap.evm_id().ok_or("no Base lock")?;
                 let latest = evm_leg::latest_block(ns, token).await?;
-                swap.watch_from(latest.saturating_sub(evm_leg::LOG_PAGE * 5));
+                // About two days of Base blocks back: a page closed for a long while still finds it.
+                swap.watch_from(latest.saturating_sub(evm_leg::LOG_PAGE * 45));
                 let view = evm_leg::lock_view(ns, &id, token).await?;
                 // Confirmations from the lock's own block, not from when this page saw it.
-                let locked_at = evm_leg::locked_block(ns, &id, swap.evm_from_block(), token).await?.ok_or("The solver's Base lock is not on chain yet.")?;
+                let locked_at = match swap.evm_lock_block {
+                    Some(block) => block,
+                    None => {
+                        let block = evm_leg::locked_block(ns, &id, swap.evm_from_block(), token).await?.ok_or("The solver's Base lock is not on chain yet.")?;
+                        swap.evm_lock_block = Some(block);
+                        block
+                    }
+                };
                 let _ = swap.check_evm_lock(&view, latest.saturating_sub(locked_at) + 1, base_clock()?);
             }
         }
@@ -426,6 +434,9 @@ async fn step(
                     } else {
                         swap.line = format!("Claimed on Base; waiting for confirmations ({depth}/{EVM_CONFIRMATIONS}).");
                     }
+                } else if swap.claim_sent && !evm_leg::refunded(ns, &id, swap.evm_from_block(), token).await? {
+                    // Our claim went out and the lock is spent, but no log yet: the logs lag.
+                    return Err("Claimed on Base; waiting for the chain's logs.".into());
                 } else {
                     // Refunded by the solver: wait for the NPT refund at its timeout.
                     swap.step = Step::CheckEvmLock;
@@ -441,8 +452,9 @@ async fn step(
             // before it is sent.
             if !swap.claim_sent {
                 let view = evm_leg::lock_view(ns, &id, token).await?;
+                // Too late to reveal? The later of Base's clock and the computer's.
                 let chain_time = evm_leg::chain_time(ns, token).await?;
-                swap.ready_to_reveal(&view, chain_time)?;
+                swap.ready_to_reveal(&view, chain_time.max(runtime::now_secs()))?;
                 save(token, network, swap).await?;
             }
             evm_leg::send(ns, &account, &tx, token, &waiting).await?;
@@ -454,13 +466,13 @@ async fn step(
                 for m in mine {
                     if let Ok(request) = swap.on_npt_locked(m, now) {
                         let reply = provider("htlc_check", network, request, token).await?;
-                        swap.npt_checked(&reply, base_clock()?)?;
+                        swap.npt_checked(&reply, base_clock()?.max(now))?;
                         break;
                     }
                 }
             } else {
                 let reply = provider("htlc_check", network, swap.npt_check_request()?, token).await?;
-                swap.npt_checked(&reply, base_clock()?)?;
+                swap.npt_checked(&reply, base_clock()?.max(now))?;
             }
         }
         Step::LockingEvm => {
@@ -485,7 +497,7 @@ async fn step(
                 return Ok(());
             }
             evm_leg::require_test_chain(ns, token).await?;
-            if !swap.evm_lock_in_time(base_clock()?) {
+            if !swap.evm_lock_in_time(base_clock()?.max(now)) {
                 swap.step = Step::Failed;
                 swap.line = "Too late to lock on Base safely; nothing of yours was locked there. The solver's NPT goes back to it.".into();
                 return Ok(());

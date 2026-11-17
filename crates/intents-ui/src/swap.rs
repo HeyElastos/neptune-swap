@@ -144,6 +144,9 @@ pub struct Swap {
     /// Gets NPT: the Base lock went to Wallet (it may land later even if the page lost track).
     #[serde(default)]
     pub lock_broadcast: bool,
+    /// Gives NPT: the Base block the solver's lock was made in, once found.
+    #[serde(default)]
+    pub evm_lock_block: Option<u64>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -195,6 +198,7 @@ impl Swap {
             submitted_at: None,
             last_sent: None,
             lock_broadcast: false,
+            evm_lock_block: None,
         };
         Ok((swap, sealed))
     }
@@ -656,13 +660,16 @@ impl Swap {
         self.step != before
     }
 
-    /// Moves on when Base's own clock (`chain_now`, the contract's `chainTime()`) says a Base
-    /// deadline has passed: the same clock the contract enforces refunds with.
-    pub fn tick_chain(&mut self, chain_now: u64) -> bool {
+    /// Moves on when a Base deadline has passed. "Has the refund opened?" follows Base's own
+    /// clock (`chain_now`, the contract's `chainTime()`, the clock the contract enforces);
+    /// "is it too late to reveal?" takes the later of that and the computer's clock (`now`),
+    /// since the latest block's time lags on a quiet chain.
+    pub fn tick_chain(&mut self, chain_now: u64, now: u64) -> bool {
         let before = self.step;
+        let late = chain_now.max(now);
         match self.step {
             // Not sent yet, and too late to reveal safely: back to waiting for the NPT refund.
-            Step::Claiming if !self.claim_sent && self.evm_refund_after.is_some_and(|at| !may_reveal(self.other(), at, chain_now)) => {
+            Step::Claiming if !self.claim_sent && self.evm_refund_after.is_some_and(|at| !may_reveal(self.other(), at, late)) => {
                 self.step = Step::CheckEvmLock;
                 self.line = "Too late to claim on Base safely. Your NPT comes back after its timeout.".into();
             }
@@ -885,8 +892,8 @@ mod tests {
         locked.step = Step::AwaitSecret;
         locked.evm_refund_after = Some(NOW + 100);
         assert!(!locked.tick(NOW + 10_000), "the computer's clock never decides a Base deadline");
-        assert!(!locked.tick_chain(NOW + 99));
-        assert!(locked.tick_chain(NOW + 100));
+        assert!(!locked.tick_chain(NOW + 99, 0));
+        assert!(locked.tick_chain(NOW + 100, 0));
         assert_eq!(locked.step, Step::RefundingEvm);
 
         // While claiming, time never turns the swap into a refund: the secret may be out.
@@ -896,14 +903,14 @@ mod tests {
         claiming.neptune_refund_ms = Some(NOW * 1000);
         claiming.evm_refund_after = Some(NOW + H);
         assert!(!claiming.tick(NOW + 10 * H));
-        assert!(!claiming.tick_chain(NOW + 10 * H));
+        assert!(!claiming.tick_chain(NOW + 10 * H, NOW + 10 * H));
         // Not sent yet and too late to reveal: back to waiting, then the NPT refund.
         let mut late = started(true);
         late.step = Step::Claiming;
         late.evm_refund_after = Some(NOW + H);
         late.neptune_refund_ms = Some((NOW + 5 * H) * 1000);
         assert!(!late.tick(NOW + 1));
-        assert!(late.tick_chain(NOW + 1));
+        assert!(late.tick_chain(NOW - 10 * H, NOW + 1), "a lagging chain clock never makes a late reveal look early");
         assert_eq!(late.step, Step::CheckEvmLock);
         assert!(late.tick(NOW + 5 * H));
         assert_eq!(late.step, Step::RefundingNpt);
