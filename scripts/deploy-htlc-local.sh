@@ -11,11 +11,11 @@ case "$RPC" in http://127.0.0.1:*|http://localhost:*) ;; *) echo "refusing non-l
 CAST=~/.foundry/bin/cast
 KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 # anvil's published test account 0
 DEPLOYER=0x4e59b44847b379578588920ca78fbf26c0b4956c
-CONTRACT=0xc85855fc2f80136ed6f2fbe465ff5c2937e02822
+CONTRACT=0xdd09a1ceac5cbaf9460f07c261755a434e8b85d2
 if [ "$($CAST code $CONTRACT --rpc-url "$RPC")" = "0x" ]; then
   $CAST send $DEPLOYER 0x$(printf '%064d' 0)$(cat contracts/htlc-evm/NeptuneHtlc.init.hex) \
     --private-key $KEY --rpc-url "$RPC" >/dev/null
 fi
-[ "$($CAST keccak "$($CAST code $CONTRACT --rpc-url "$RPC")")" = 0xda6b4d8a99e7065db772ffee9a41063b6c650e37a5537dcb19c2c9a4fb20fa3b ] \
+[ "$($CAST keccak "$($CAST code $CONTRACT --rpc-url "$RPC")")" = 0x3dcc7f166631c04d08722536f16312285a401e60317d09d0b9e64be0cf572ee0 ] \
   || { echo "NeptuneHtlc is not at $CONTRACT" >&2; exit 1; }
 echo $CONTRACT

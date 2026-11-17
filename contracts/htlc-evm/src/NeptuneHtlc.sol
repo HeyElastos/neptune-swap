@@ -43,6 +43,13 @@ contract NeptuneHtlc {
     error RefundNotOpen();
     error TransferFailed();
 
+    /// @notice The chain's clock, the one refunds follow. Readers that cannot read block headers
+    /// (an app reading through its wallet) compare their deadlines against this, never against
+    /// their own computer's clock.
+    function chainTime() external view returns (uint64) {
+        return uint64(block.timestamp);
+    }
+
     /// @notice The id a lock with these terms gets. The hash lock is unique per swap.
     function lockId(
         address sender,

@@ -215,6 +215,41 @@ pub async fn check_contract(namespace: &str, token: &str) -> Result<(), String> 
     }
 }
 
+/// Base's own clock, as the swap contract reads it (`chainTime()`): every Base deadline is
+/// checked against this, never against the computer's clock.
+pub async fn chain_time(namespace: &str, token: &str) -> Result<u64, String> {
+    let ret = read(namespace, "eth_call", json!([{ "to": hex(&HTLC_ADDRESS), "data": hex(&evm_htlc::chain_time()) }, "latest"]), token).await?;
+    ret.as_str().and_then(parse_hex).as_deref().and_then(evm_htlc::decode_chain_time).ok_or("Chain read: no chain time".into())
+}
+
+/// The block the lock `id` was made in (its `Locked` log), searched from `from_block`.
+pub async fn locked_block(namespace: &str, id: &Word, from_block: u64, token: &str) -> Result<Option<u64>, String> {
+    let latest = latest_block(namespace, token).await?;
+    let topic = hex(&evm_htlc::keccak(b"Locked(bytes32,address,address,address,uint256,bytes32,uint64)"));
+    for (start, end) in log_pages(from_block, latest) {
+        let filter = json!({ "address": hex(&HTLC_ADDRESS), "topics": [topic, hex(id)], "fromBlock": format!("0x{start:x}"), "toBlock": format!("0x{end:x}") });
+        let logs = read(namespace, "eth_getLogs", json!([filter]), token).await?;
+        if let Some(block) = logs.as_array().and_then(|l| l.first()).and_then(|l| quantity(&l["blockNumber"])) {
+            return Ok(Some(block));
+        }
+    }
+    Ok(None)
+}
+
+/// The block the `Claimed` log of `id` is in, if claimed.
+pub async fn claimed_block(namespace: &str, id: &Word, from_block: u64, token: &str) -> Result<Option<u64>, String> {
+    let latest = latest_block(namespace, token).await?;
+    let topic = hex(&evm_htlc::keccak(b"Claimed(bytes32,bytes32)"));
+    for (start, end) in log_pages(from_block, latest) {
+        let filter = json!({ "address": hex(&HTLC_ADDRESS), "topics": [topic, hex(id)], "fromBlock": format!("0x{start:x}"), "toBlock": format!("0x{end:x}") });
+        let logs = read(namespace, "eth_getLogs", json!([filter]), token).await?;
+        if let Some(block) = logs.as_array().and_then(|l| l.first()).and_then(|l| quantity(&l["blockNumber"])) {
+            return Ok(Some(block));
+        }
+    }
+    Ok(None)
+}
+
 /// A lock as the swap contract holds it.
 pub async fn lock_view(namespace: &str, id: &Word, token: &str) -> Result<LockView, String> {
     let ret = read(namespace, "eth_call", json!([{ "to": hex(&HTLC_ADDRESS), "data": hex(&evm_htlc::locks(id)) }, "latest"]), token).await?;
@@ -375,7 +410,7 @@ mod tests {
 
     #[test]
     fn only_the_swap_contract_is_accepted_and_logs_are_read_in_pages() {
-        assert_eq!(check_named_contract("c85855fc2f80136ed6f2fbe465ff5c2937e02822"), Ok(()));
+        assert_eq!(check_named_contract("dd09a1ceac5cbaf9460f07c261755a434e8b85d2"), Ok(()));
         assert!(check_named_contract("0xcccccccccccccccccccccccccccccccccccccccc").is_err());
         assert!(check_named_contract("nonsense").is_err());
         assert_eq!(claim_tx(&[1; 32], &[2; 32], "x").to, HTLC_ADDRESS);

@@ -31,8 +31,12 @@ use crate::evm_leg::{self, Expected, Tx};
 pub const NPT_FEE: &str = "0.05";
 /// Neptune blocks the solver's NPT lock must be under before the user locks anything.
 pub const NPT_MIN_DEPTH: u64 = 6;
-/// Base blocks after the solver's lock before the user reveals the secret by claiming it.
-pub const EVM_CONFIRMATIONS: u64 = 10;
+/// Base blocks under the solver's lock (counted from the lock's own block) before the user
+/// reveals the secret by claiming it, and under the user's claim before the swap counts as
+/// done: about 40 seconds on Base, well past its re-org depth in practice.
+pub const EVM_CONFIRMATIONS: u64 = 20;
+/// Neptune blocks under a claim or refund before it counts as done.
+pub const NPT_SETTLED_DEPTH: u64 = 3;
 /// How long after the quote the user waits for the solver's NPT lock before giving up
 /// (nothing of the user's is locked yet).
 const NPT_LOCK_WAIT_SECS: u64 = 3 * 3600;
@@ -629,6 +633,10 @@ impl Swap {
     }
 
     /// Moves on when time has run out for the current step. Returns whether it changed.
+    /// Moves on when the computer's clock (`now`) says time has run out for the current step:
+    /// only for deadlines that are the app's own (quote expiry) or Neptune's (whose lock
+    /// script reads transaction timestamps, which nodes keep close to real time). Base
+    /// deadlines follow Base's clock, in [`Swap::tick_chain`].
     pub fn tick(&mut self, now: u64) -> bool {
         let before = self.step;
         let quote_expiry = self.quote.as_ref().map(|q| q.body.expires_at);
@@ -636,11 +644,6 @@ impl Swap {
             Step::Asked if now > self.intent.body.expires_at => self.fail("No quote came before the request expired. Nothing was locked."),
             Step::Quoted if quote_expiry.is_some_and(|at| now > at) => self.fail("The quote expired before it was accepted. Nothing was locked."),
             Step::Accepted if quote_expiry.is_some_and(|at| now > at) => self.fail("The quote expired before your NPT was locked. Nothing was locked."),
-            // Not sent yet, and too late to reveal safely: back to waiting for the NPT refund.
-            Step::Claiming if !self.claim_sent && self.evm_refund_after.is_some_and(|at| !may_reveal(self.other(), at, now)) => {
-                self.step = Step::CheckEvmLock;
-                self.line = "Too late to claim on Base safely. Your NPT comes back after its timeout.".into();
-            }
             Step::AwaitEvmLock | Step::CheckEvmLock | Step::LockingNpt if self.neptune_refund_ms.is_some_and(|ms| now * 1000 >= ms) => {
                 self.step = Step::RefundingNpt;
                 self.line = "The solver did not lock in time. Taking your NPT back.".into();
@@ -648,7 +651,22 @@ impl Swap {
             Step::AwaitNptLock | Step::CheckNptLock if now > self.accepted_at + NPT_LOCK_WAIT_SECS => {
                 self.fail("The solver did not lock its NPT in time. Nothing of yours was locked.")
             }
-            Step::AwaitSecret if self.evm_refund_after.is_some_and(|at| now >= at) => {
+            _ => {}
+        }
+        self.step != before
+    }
+
+    /// Moves on when Base's own clock (`chain_now`, the contract's `chainTime()`) says a Base
+    /// deadline has passed: the same clock the contract enforces refunds with.
+    pub fn tick_chain(&mut self, chain_now: u64) -> bool {
+        let before = self.step;
+        match self.step {
+            // Not sent yet, and too late to reveal safely: back to waiting for the NPT refund.
+            Step::Claiming if !self.claim_sent && self.evm_refund_after.is_some_and(|at| !may_reveal(self.other(), at, chain_now)) => {
+                self.step = Step::CheckEvmLock;
+                self.line = "Too late to claim on Base safely. Your NPT comes back after its timeout.".into();
+            }
+            Step::AwaitSecret if self.evm_refund_after.is_some_and(|at| chain_now >= at) => {
                 self.step = Step::RefundingEvm;
                 self.line = "The solver did not claim in time. Taking your Base lock back: approve it in the Wallet app.".into();
             }
@@ -866,7 +884,9 @@ mod tests {
         let mut locked = started(false);
         locked.step = Step::AwaitSecret;
         locked.evm_refund_after = Some(NOW + 100);
-        assert!(locked.tick(NOW + 100));
+        assert!(!locked.tick(NOW + 10_000), "the computer's clock never decides a Base deadline");
+        assert!(!locked.tick_chain(NOW + 99));
+        assert!(locked.tick_chain(NOW + 100));
         assert_eq!(locked.step, Step::RefundingEvm);
 
         // While claiming, time never turns the swap into a refund: the secret may be out.
@@ -876,12 +896,14 @@ mod tests {
         claiming.neptune_refund_ms = Some(NOW * 1000);
         claiming.evm_refund_after = Some(NOW + H);
         assert!(!claiming.tick(NOW + 10 * H));
+        assert!(!claiming.tick_chain(NOW + 10 * H));
         // Not sent yet and too late to reveal: back to waiting, then the NPT refund.
         let mut late = started(true);
         late.step = Step::Claiming;
         late.evm_refund_after = Some(NOW + H);
         late.neptune_refund_ms = Some((NOW + 5 * H) * 1000);
-        assert!(late.tick(NOW + 1));
+        assert!(!late.tick(NOW + 1));
+        assert!(late.tick_chain(NOW + 1));
         assert_eq!(late.step, Step::CheckEvmLock);
         assert!(late.tick(NOW + 5 * H));
         assert_eq!(late.step, Step::RefundingNpt);

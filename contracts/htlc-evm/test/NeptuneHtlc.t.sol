@@ -97,6 +97,11 @@ contract NeptuneHtlcTest {
         id = htlc.lock{value: amount}(BOB, hashLock, T);
     }
 
+    function test_chain_time_is_the_block_time() public {
+        vm.warp(1_900_000_123);
+        eq(htlc.chainTime(), 1_900_000_123, "chain time");
+    }
+
     function test_hash_lock_is_sha256_of_the_32_byte_secret() public pure {
         // The same vector the Neptune lock script is held to: SHA-256 of 32 raw bytes.
         require(

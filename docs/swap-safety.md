@@ -63,10 +63,9 @@ shorter one, and the NPT giver reveals the secret by claiming it.
 ## 5. Chain reorganisations
 
 - Neptune: a lock counts at a set depth on the receiver's own node (`min_depth`).
-- Base: the app waits 10 blocks after it first sees the solver's lock before revealing, and
-  reads the lock again right before the claim goes out (`ready_to_reveal`).
-- **Open:** counting from the lock's own block rather than from when the page first saw it,
-  and a re-org depth chosen for Base main net.
+- Base: the app waits 20 blocks under the solver's lock (from the lock's own block) before
+  revealing, reads the lock again right before the claim goes out (`ready_to_reveal`), and
+  counts its own claim done at 20 blocks.
 
 ## 6. Fee spikes near a timeout
 
@@ -140,14 +139,22 @@ holds exactly the open locks; every party holds exactly what the rules give it; 
 claim or refund went through, no allowed one failed, and no lock paid twice. A stateless
 fuzz test checks that only the exact secret opens a lock and only before its time.
 
-## Must be closed before main net
+## Closed before main net (2026-11-17)
 
-- The reveal deadline and the step deadlines follow the computer's clock; they must follow
-  Base's block time (needs a block-header read through the Wallet bridge).
-- Base confirmations from the lock's own block, and a re-org depth for Base main net.
-- One swap's Wallet wait pauses the others (the app runs one swap at a time today; keep it so,
-  or run each swap on its own).
-- "Never reached the chain" for an NPT lock must be decided on a fully synced node.
+- **Base's own clock.** Every Base deadline (the last moment to reveal, the refund of the
+  user's Base lock, whether a Base lock can still be made) is checked against Base's clock
+  as the contract itself reads it (`chainTime()`, read through the Wallet bridge), never the
+  computer's. Neptune deadlines follow the computer's clock, which Neptune nodes hold
+  transaction timestamps to.
+- **Confirmations from the lock's own block** (its `Locked` log), 20 Base blocks, before
+  revealing; and 20 blocks under the user's claim before the swap counts as done. A Neptune
+  claim or refund counts at 3 blocks.
+- **One swap at a time.** The app starts no new swap while one is open, so one Wallet wait
+  never holds up another swap's deadlines (older open swaps found in the journal run in
+  order of their deadlines).
+- **"Never reached the chain"** for an NPT lock is decided only when this Home's node has
+  blocks from at least six hours past the refund time; a node behind or syncing decides
+  nothing.
 
 ## Before main net
 

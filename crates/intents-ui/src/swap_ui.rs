@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 use crate::evm_leg::{self, Account};
-use crate::swap::{Step, Swap};
+use crate::swap::{Step, Swap, EVM_CONFIRMATIONS, NPT_SETTLED_DEPTH};
 use crate::{intent, offers_ui, runtime, wallet_ui, AppWindow, StepRow};
 
 /// How often swaps look for news while they wait.
@@ -265,14 +265,14 @@ async fn run(weak: Weak<AppWindow>, state: Shared, network: String, token: Strin
     if std::mem::replace(&mut state.borrow_mut().running, true) {
         return;
     }
-    // Base blocks at which each swap's counter-lock was first seen good (a reload counts again).
-    let mut seen_at: std::collections::HashMap<String, u64> = Default::default();
     loop {
         let swaps = state.borrow().swaps.clone();
         if !swaps.iter().any(Swap::open_ended) {
             break;
         }
         let now = runtime::now_secs();
+        // Base's own clock, read once a pass: every Base deadline is checked against it.
+        let chain_now = evm_leg::chain_time(evm_leg::BASE, &token).await.ok();
         // One read of the deals topic for all swaps of each network kind.
         let mut mail: Vec<Vec<u8>> = vec![];
         for main_net in [false, true] {
@@ -289,8 +289,11 @@ async fn run(weak: Weak<AppWindow>, state: Shared, network: String, token: Strin
             }
             let before = swap.clone();
             swap.tick(now);
+            if let Some(chain_now) = chain_now {
+                swap.tick_chain(chain_now);
+            }
             let mine: Vec<Vec<u8>> = mail.iter().filter_map(|m| swap.open(m)).collect();
-            if let Err(e) = step(&weak, &state, &mut swap, &network, &token, &mine, &mut seen_at, now).await {
+            if let Err(e) = step(&weak, &state, &mut swap, &network, &token, &mine, chain_now, now).await {
                 swap.line = e;
                 trouble = true;
             }
@@ -329,9 +332,10 @@ async fn step(
     network: &str,
     token: &str,
     mine: &[Vec<u8>],
-    seen_at: &mut std::collections::HashMap<String, u64>,
+    chain_now: Option<u64>,
     now: u64,
 ) -> Result<(), String> {
+    let base_clock = || chain_now.ok_or("Could not read Base's clock; trying again.".to_string());
     let waiting = |line: String| {
         if let Some(app) = weak.upgrade() {
             app.set_swap_line(line.into());
@@ -391,7 +395,6 @@ async fn step(
         Step::AwaitEvmLock | Step::CheckEvmLock => {
             for m in mine {
                 if swap.on_evm_locked(m, now).is_ok() {
-                    seen_at.remove(&swap.id);
                     break;
                 }
             }
@@ -400,12 +403,11 @@ async fn step(
                 evm_leg::check_contract(ns, token).await?;
                 let id = swap.evm_id().ok_or("no Base lock")?;
                 let latest = evm_leg::latest_block(ns, token).await?;
-                swap.watch_from(latest.saturating_sub(evm_leg::LOG_PAGE));
+                swap.watch_from(latest.saturating_sub(evm_leg::LOG_PAGE * 5));
                 let view = evm_leg::lock_view(ns, &id, token).await?;
-                let first = *seen_at.entry(swap.id.clone()).or_insert(latest);
-                if swap.check_evm_lock(&view, latest.saturating_sub(first), now).is_err() {
-                    seen_at.remove(&swap.id);
-                }
+                // Confirmations from the lock's own block, not from when this page saw it.
+                let locked_at = evm_leg::locked_block(ns, &id, swap.evm_from_block(), token).await?.ok_or("The solver's Base lock is not on chain yet.")?;
+                let _ = swap.check_evm_lock(&view, latest.saturating_sub(locked_at) + 1, base_clock()?);
             }
         }
         Step::Claiming => {
@@ -416,7 +418,14 @@ async fn step(
                 // Spent by a claim (a Claimed log under this hash lock) or by the solver's refund.
                 let hash_lock = swap.hash_lock().ok_or("no hash lock")?;
                 if evm_leg::claimed_secret(ns, &id, &hash_lock, swap.evm_from_block(), token).await?.is_some() {
-                    swap.finish(format!("Swap complete: {} is in your Wallet account.", swap.want_label()));
+                    // Done once the claim is deep enough that no re-org can undo it.
+                    let at = evm_leg::claimed_block(ns, &id, swap.evm_from_block(), token).await?.ok_or("Reading the claim's block; trying again.")?;
+                    let depth = evm_leg::latest_block(ns, token).await?.saturating_sub(at) + 1;
+                    if depth >= EVM_CONFIRMATIONS {
+                        swap.finish(format!("Swap complete: {} is in your Wallet account.", swap.want_label()));
+                    } else {
+                        swap.line = format!("Claimed on Base; waiting for confirmations ({depth}/{EVM_CONFIRMATIONS}).");
+                    }
                 } else {
                     // Refunded by the solver: wait for the NPT refund at its timeout.
                     swap.step = Step::CheckEvmLock;
@@ -432,24 +441,26 @@ async fn step(
             // before it is sent.
             if !swap.claim_sent {
                 let view = evm_leg::lock_view(ns, &id, token).await?;
-                swap.ready_to_reveal(&view, runtime::now_secs())?;
+                let chain_time = evm_leg::chain_time(ns, token).await?;
+                swap.ready_to_reveal(&view, chain_time)?;
                 save(token, network, swap).await?;
             }
             evm_leg::send(ns, &account, &tx, token, &waiting).await?;
-            swap.finish(format!("Swap complete: {} is in your Wallet account.", swap.want_label()));
+            // Counted done once the claim is deep enough (the spent path above).
+            swap.line = "Claimed on Base; waiting for confirmations.".into();
         }
         Step::AwaitNptLock | Step::CheckNptLock => {
             if swap.step == Step::AwaitNptLock {
                 for m in mine {
                     if let Ok(request) = swap.on_npt_locked(m, now) {
                         let reply = provider("htlc_check", network, request, token).await?;
-                        swap.npt_checked(&reply, now)?;
+                        swap.npt_checked(&reply, base_clock()?)?;
                         break;
                     }
                 }
             } else {
                 let reply = provider("htlc_check", network, swap.npt_check_request()?, token).await?;
-                swap.npt_checked(&reply, now)?;
+                swap.npt_checked(&reply, base_clock()?)?;
             }
         }
         Step::LockingEvm => {
@@ -465,7 +476,7 @@ async fn step(
             if swap.lock_broadcast {
                 // Sent before: never send again; watch until its refund time, when a lock that
                 // has not landed cannot land any more.
-                if swap.evm_refund_after().is_some_and(|at| now > at) {
+                if swap.evm_refund_after().is_some_and(|at| base_clock().is_ok_and(|t| t > at)) {
                     swap.step = Step::Failed;
                     swap.line = "Your Base lock never landed; nothing of yours was locked. The solver's NPT goes back to it.".into();
                 } else {
@@ -474,7 +485,7 @@ async fn step(
                 return Ok(());
             }
             evm_leg::require_test_chain(ns, token).await?;
-            if !swap.evm_lock_in_time(now) {
+            if !swap.evm_lock_in_time(base_clock()?) {
                 swap.step = Step::Failed;
                 swap.line = "Too late to lock on Base safely; nothing of yours was locked there. The solver's NPT goes back to it.".into();
                 return Ok(());
@@ -533,10 +544,13 @@ async fn step(
             let note = swap.npt_note().ok_or("no lock note")?;
             let spent = provider("htlc_spent", network, json!({ "note": note, "from_height": swap.npt_from_height() }), token).await?;
             if spent["spent"] == true {
-                if spent["by_claim"] == true {
+                let depth = spent["depth"].as_u64().unwrap_or(0);
+                if spent["by_claim"] != true {
+                    swap.finish("The NPT lock was spent after its refund time, not by your claim. Check your Neptune wallet.");
+                } else if depth >= NPT_SETTLED_DEPTH {
                     swap.finish(format!("Swap complete: {} is in your Neptune wallet.", swap.want_label()));
                 } else {
-                    swap.finish("The NPT lock was spent after its refund time, not by your claim. Check your Neptune wallet.");
+                    swap.line = format!("Your NPT claim is in a block; waiting for confirmations ({depth}/{NPT_SETTLED_DEPTH}).");
                 }
                 return Ok(());
             }
@@ -565,11 +579,18 @@ async fn step(
             }
             let spent = provider("htlc_spent", network, json!({ "swap_id": swap.swap_id() }), token).await?;
             if spent["spent"] == true {
-                swap.finish("Your NPT is back in your wallet. The swap did not happen.");
+                let depth = spent["depth"].as_u64().unwrap_or(0);
+                if depth >= NPT_SETTLED_DEPTH {
+                    swap.finish("Your NPT is back in your wallet. The swap did not happen.");
+                } else {
+                    swap.line = format!("Your NPT refund is in a block; waiting for confirmations ({depth}/{NPT_SETTLED_DEPTH}).");
+                }
                 return Ok(());
             }
-            // A lock that never reached the chain: an hour past its refund time, it never will.
-            if spent["found"] == false && swap.neptune_refund_ms().is_some_and(|ms| now * 1000 > ms + 3_600_000) {
+            // A lock that never reached the chain: decided only when this Home's node has blocks
+            // from well past the refund time (a node behind or syncing knows too little).
+            let tip_at = spent["tip_at_ms"].as_u64().unwrap_or(0);
+            if spent["found"] == false && swap.neptune_refund_ms().is_some_and(|ms| tip_at > ms + 6 * 3_600_000) {
                 swap.finish("Your NPT lock never reached the chain; your NPT stayed in your wallet.");
                 return Ok(());
             }

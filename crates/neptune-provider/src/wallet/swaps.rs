@@ -317,7 +317,13 @@ impl Wallets {
         };
         let tip = rpc::parse_height(&node.call(rpc::height_request())?)?;
         let Some(at) = find(&note, from, tip, node)? else {
-            return Ok(json!({ "found": false, "spent": false, "tip": tip }));
+            // The tip's time: "not found" means something only once the node's chain reaches
+            // well past the lock's refund time (a node behind or syncing knows too little).
+            let tip_at_ms = blocks(node, tip, tip)?
+                .first()
+                .map(|b| light_core::neptune_consensus::block::block_kernel::BlockKernel::from(b.kernel.clone()).header.timestamp.to_millis())
+                .unwrap_or(0);
+            return Ok(json!({ "found": false, "spent": false, "tip": tip, "tip_at_ms": tip_at_ms }));
         };
         let mut start = at.height;
         while start <= tip {
