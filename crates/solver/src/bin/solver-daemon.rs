@@ -187,6 +187,11 @@ fn handle(
 ) -> anyhow::Result<()> {
     let now = now_secs();
     if let Ok(intent) = decode::<Intent>(plain, now, net) {
+        // An intent seen before (resent, or replayed) never replaces its deal: that would drop
+        // the deal's locks and keys mid-swap.
+        if deals.contains_key(&intent.digest) || deals.values().any(|d| d.user == intent.signer.to_string()) {
+            return Ok(());
+        }
         let deliver = offers.iter().zip(ids).find_map(|(t, id)| matches(&offer_of(t, id), &intent.body)).context("the intent takes none of our offers")?;
         let (deal, quote) = Deal::quote(intent, deliver, key, net, chains)?;
         send_to(carrier, topic, &deal.user, &quote);

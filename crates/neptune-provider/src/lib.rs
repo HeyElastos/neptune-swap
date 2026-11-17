@@ -322,9 +322,9 @@ impl Provider {
             Request::WalletSend { network, to, amount, fee } => self.wallet(&network, |w, n| {
                 w.wallets.send(&n.id, n.chain, &to, &amount, &fee, now_ms(), &HttpNode(n.rpc.clone()))
             }),
-            Request::HtlcClaimLock { network } => self.wallet(&network, |w, n| w.wallets.htlc_claim_lock(&n.id, n.chain)),
-            Request::HtlcPrepare { network } => self.wallet(&network, |w, n| w.wallets.htlc_prepare(&n.id, n.chain)),
-            Request::HtlcLock { network, amount, fee, claim_lock, refund_after_ms, swap_id, background } => self.wallet(&network, |w, n| {
+            Request::HtlcClaimLock { network } => self.swap_start(&network, |w, n| w.wallets.htlc_claim_lock(&n.id, n.chain)),
+            Request::HtlcPrepare { network } => self.swap_start(&network, |w, n| w.wallets.htlc_prepare(&n.id, n.chain)),
+            Request::HtlcLock { network, amount, fee, claim_lock, refund_after_ms, swap_id, background } => self.swap_start(&network, |w, n| {
                 w.wallets.htlc_lock(&n.id, n.chain, &amount, &fee, &claim_lock, refund_after_ms, swap_id.as_deref(), now_ms(), &HttpNode(n.rpc.clone()), proving(background))
             }),
             Request::HtlcCheck { network, note, from_height, hash_lock, claim_index, amount_nau, least_refund_after_ms, min_depth } => {
@@ -350,7 +350,7 @@ impl Provider {
             }),
             Request::SolverIdentity { network } => self.wallet(&network, |w, n| w.wallets.solver_identity(&n.id, n.chain)),
             Request::OfferSign { network, offer } => {
-                self.wallet(&network, |w, n| w.wallets.offer_sign(&n.id, n.chain, &offer, now_ms() / 1000))
+                self.swap_start(&network, |w, n| w.wallets.offer_sign(&n.id, n.chain, &offer, now_ms() / 1000))
             }
             Request::Prices {} if !self.price_sources => {
                 error("prices_disabled", "this Home does not ask public price sources")
@@ -386,6 +386,18 @@ impl Provider {
 
     /// Runs a wallet operation on a configured network; errors become a
     /// `wallet_error` reply with the operation's message.
+    /// Starting a swap (a swap key, a secret, a lock, an offer) on main net is refused, whatever
+    /// asks: real money waits for an independent audit (docs/swap-safety.md). Claims and
+    /// refunds stay open, so nothing already locked can get stuck.
+    fn swap_start(&self, network: &str, op: impl FnOnce(&Self, &Network) -> anyhow::Result<Value>) -> Value {
+        match self.networks.iter().find(|n| n.id == network) {
+            Some(found) if found.chain == Chain::Main && !MAIN_NET_SWAPS => {
+                error("swaps_off_on_main_net", "swaps run on test networks only until an independent audit")
+            }
+            _ => self.wallet(network, op),
+        }
+    }
+
     fn wallet(&self, network: &str, op: impl FnOnce(&Self, &Network) -> anyhow::Result<Value>) -> Value {
         let Some(found) = self.networks.iter().find(|n| n.id == network) else {
             return error("unknown_network", &format!("{network} is not configured"));
@@ -484,6 +496,9 @@ fn error(code: &str, message: &str) -> Value {
 
 #[cfg(test)]
 mod tests;
+
+/// Swaps with real money: off until an independent audit, and not a setting.
+const MAIN_NET_SWAPS: bool = false;
 
 fn proving(background: bool) -> wallet::Proving {
     if background { wallet::Proving::Background } else { wallet::Proving::Wait }

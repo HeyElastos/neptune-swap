@@ -189,6 +189,20 @@ pub async fn read(namespace: &str, method: &str, params: Value, token: &str) -> 
     Ok(reply["result"].clone())
 }
 
+/// Swaps run only against a local test chain until an independent audit: a public Base (main
+/// net or its test net) has tens of millions of blocks, a local chain a few thousand.
+pub const TEST_CHAIN_MAX_HEIGHT: u64 = 1_000_000;
+
+/// Refuses a public chain: with test NPT on one side and real coins on the other, a swap
+/// could cost real money.
+pub async fn require_test_chain(namespace: &str, token: &str) -> Result<(), String> {
+    if latest_block(namespace, token).await? < TEST_CHAIN_MAX_HEIGHT {
+        Ok(())
+    } else {
+        Err("Swaps run on local test chains only until an independent audit. This Base is a public chain: nothing was sent.".into())
+    }
+}
+
 /// Checks that the swap contract is deployed on this chain (anyone may deploy it, and the
 /// address fixes what it is).
 pub async fn check_contract(namespace: &str, token: &str) -> Result<(), String> {
@@ -229,6 +243,20 @@ pub async fn claimed_secret(namespace: &str, id: &Word, hash_lock: &Word, from_b
         }
     }
     Ok(None)
+}
+
+/// Whether a `Refunded` log for `id` exists from `from_block` on.
+pub async fn refunded(namespace: &str, id: &Word, from_block: u64, token: &str) -> Result<bool, String> {
+    let latest = latest_block(namespace, token).await?;
+    let topic = hex(&evm_htlc::keccak(b"Refunded(bytes32)"));
+    for (start, end) in log_pages(from_block, latest) {
+        let filter = json!({ "address": hex(&HTLC_ADDRESS), "topics": [topic, hex(id)], "fromBlock": format!("0x{start:x}"), "toBlock": format!("0x{end:x}") });
+        let logs = read(namespace, "eth_getLogs", json!([filter]), token).await?;
+        if logs.as_array().is_some_and(|l| !l.is_empty()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Sends `tx` from `account`: Wallet shows it and the user approves, then it is broadcast

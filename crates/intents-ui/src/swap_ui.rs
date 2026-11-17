@@ -109,6 +109,19 @@ async fn send(weak: Weak<AppWindow>, state: Shared) {
         return app.set_form_error("No randomness for the one-time DID.".into());
     }
     let main_net = network == "neptune-main";
+    if main_net {
+        return app.set_form_error("Swaps run on test networks only until an independent audit. Pick a test network.".into());
+    }
+    drop(app);
+    if let Some(ns) = evm_leg::namespace(built.other_chain()) {
+        if let Err(e) = evm_leg::require_test_chain(ns, &token).await {
+            if let Some(app) = weak.upgrade() {
+                app.set_form_error(e.into());
+            }
+            return;
+        }
+    }
+    let Some(app) = weak.upgrade() else { return };
     let (mut swap, sealed) = match Swap::start(built, &solver, main_net, seed, now) {
         Ok(started) => started,
         Err(e) => return app.set_form_error(e.into()),
@@ -193,7 +206,8 @@ async fn inbox(token: &str, main_net: bool) -> Result<Vec<Vec<u8>>, String> {
     offers_ui::join(topic, token).await?;
     let mut all = vec![];
     for _ in 0..10 {
-        let reply = runtime::peer("gossip_recv", &json!({ "topic": topic, "limit": 50 }), token).await.map_err(|e| e.message)?;
+        // What was read before an error is kept: each read consumes its messages.
+        let Ok(reply) = runtime::peer("gossip_recv", &json!({ "topic": topic, "limit": 50 }), token).await else { break };
         let messages = reply["messages"].as_array().cloned().unwrap_or_default();
         all.extend(messages.iter().filter_map(|m| URL_SAFE_NO_PAD.decode(m["content"].as_str()?).ok()));
         if messages.len() < 50 {
@@ -229,13 +243,20 @@ fn namespace(swap: &Swap) -> Result<&'static str, String> {
     evm_leg::namespace(swap.intent().other_chain()).ok_or("elastOS Wallet cannot pay on that chain.".into())
 }
 
-/// Where a provider job stands: Some(Ok) when sent, Some(Err) when it failed, None while
-/// proving or when the provider no longer knows it (then the chain decides).
-async fn job(network: &str, job: &str, token: &str) -> Option<Result<(), String>> {
+enum Job {
+    Proving,
+    Sent,
+    Failed(String),
+    /// The provider no longer knows the job (it restarted): the chain decides.
+    Gone,
+}
+
+async fn job(network: &str, job: &str, token: &str) -> Job {
     match provider("job_status", network, json!({ "job": job }), token).await {
-        Ok(v) if v["state"] == "sent" => Some(Ok(())),
-        Ok(v) if v["state"] == "failed" => Some(Err(v["message"].as_str().unwrap_or("failed").to_string())),
-        _ => None,
+        Ok(v) if v["state"] == "sent" => Job::Sent,
+        Ok(v) if v["state"] == "failed" => Job::Failed(v["message"].as_str().unwrap_or("failed").to_string()),
+        Ok(_) => Job::Proving,
+        Err(_) => Job::Gone,
     }
 }
 
@@ -284,7 +305,12 @@ async fn run(weak: Weak<AppWindow>, state: Shared, network: String, token: Strin
             }
             updated.push(swap);
         }
-        state.borrow_mut().swaps = updated;
+        // Swaps added while this pass ran (a new send) stay in.
+        let mut s = state.borrow_mut();
+        let added: Vec<Swap> = s.swaps.iter().filter(|n| !updated.iter().any(|u| u.id == n.id)).cloned().collect();
+        updated.extend(added);
+        s.swaps = updated;
+        drop(s);
         match weak.upgrade() {
             Some(app) => render(&app, &state),
             None => break,
@@ -320,6 +346,7 @@ async fn step(
             }
         }
         Step::Quoted => {
+            evm_leg::require_test_chain(namespace(swap)?, token).await?;
             let account = account_for(state, swap)?;
             let key = provider("htlc_claim_lock", network, json!({}), token).await?;
             let claim_lock = key["claim_lock"].as_str().ok_or("no swap key")?.to_string();
@@ -343,12 +370,16 @@ async fn step(
         Step::LockingNpt => {
             let sent = match swap.job.clone() {
                 Some(id) => match job(network, &id, token).await {
-                    Some(Ok(())) => true,
-                    Some(Err(e)) => {
-                        swap.job = None;
-                        return Err(format!("Proving the NPT lock failed ({e}); checking the chain."));
+                    Job::Sent => true,
+                    Job::Proving => false,
+                    Job::Failed(e) => {
+                        swap.npt_lock_failed(&e);
+                        return Ok(());
                     }
-                    None => false,
+                    Job::Gone => {
+                        swap.job = None;
+                        false
+                    }
                 },
                 None => provider("htlc_status", network, json!({ "swap_id": swap.swap_id() }), token).await?["found"] == true,
             };
@@ -393,15 +424,17 @@ async fn step(
                 }
                 return Ok(());
             }
-            // Re-checked right before the secret leaves; kept as sent before it is sent.
-            if !swap.claim_sent {
-                swap.ready_to_reveal(&view, now)?;
-                save(token, network, swap).await?;
-            }
             let account = account_for(state, swap)?;
             let secret = provider("htlc_secret", network, json!({ "swap_id": swap.swap_id() }), token).await?;
             let secret = secret["secret"].as_str().and_then(evm_htlc::parse_word).ok_or("the provider has no secret")?;
             let tx = swap.claim_tx(&secret)?;
+            // Re-checked right before the secret leaves (nothing slow after this); kept as sent
+            // before it is sent.
+            if !swap.claim_sent {
+                let view = evm_leg::lock_view(ns, &id, token).await?;
+                swap.ready_to_reveal(&view, runtime::now_secs())?;
+                save(token, network, swap).await?;
+            }
             evm_leg::send(ns, &account, &tx, token, &waiting).await?;
             swap.finish(format!("Swap complete: {} is in your Wallet account.", swap.want_label()));
         }
@@ -429,6 +462,18 @@ async fn step(
                 tell(token, swap, &sealed, now).await?;
                 return Ok(());
             }
+            if swap.lock_broadcast {
+                // Sent before: never send again; watch until its refund time, when a lock that
+                // has not landed cannot land any more.
+                if swap.evm_refund_after().is_some_and(|at| now > at) {
+                    swap.step = Step::Failed;
+                    swap.line = "Your Base lock never landed; nothing of yours was locked. The solver's NPT goes back to it.".into();
+                } else {
+                    swap.line = "Waiting for your Base lock to land…".into();
+                }
+                return Ok(());
+            }
+            evm_leg::require_test_chain(ns, token).await?;
             if !swap.evm_lock_in_time(now) {
                 swap.step = Step::Failed;
                 swap.line = "Too late to lock on Base safely; nothing of yours was locked there. The solver's NPT goes back to it.".into();
@@ -437,6 +482,7 @@ async fn step(
             let account = account_for(state, swap)?;
             // Where to look for the solver's claim from, kept before the lock goes out.
             swap.watch_from(evm_leg::latest_block(ns, token).await?);
+            swap.lock_broadcast = true;
             save(token, network, swap).await?;
             let mut block = 0;
             for tx in swap.evm_lock_txs()? {
@@ -459,8 +505,13 @@ async fn step(
             }
             if swap.step == Step::RefundingEvm {
                 if evm_leg::lock_view(ns, &id, token).await?.spent {
-                    swap.finish(format!("{} is back in your Wallet account. The swap did not happen.", swap.give_label()));
-                    return Ok(());
+                    // Spent: finished only with a Refunded log; otherwise a claim's log is late
+                    // and the secret is looked for again.
+                    if evm_leg::refunded(ns, &id, swap.evm_from_block(), token).await? {
+                        swap.finish(format!("{} is back in your Wallet account. The swap did not happen.", swap.give_label()));
+                        return Ok(());
+                    }
+                    return Err("The Base lock is spent; reading the chain again for the secret.".into());
                 }
                 let account = account_for(state, swap)?;
                 evm_leg::send(ns, &account, &swap.evm_refund_tx()?, token, &waiting).await?;
@@ -470,9 +521,9 @@ async fn step(
         Step::ClaimingNpt => {
             if let Some(id) = swap.job.clone() {
                 match job(network, &id, token).await {
-                    None => return Ok(()),
-                    Some(Ok(())) => swap.job = None,
-                    Some(Err(e)) => {
+                    Job::Proving => return Ok(()),
+                    Job::Sent | Job::Gone => swap.job = None,
+                    Job::Failed(e) => {
                         swap.job = None;
                         swap.submitted_at = None;
                         swap.line = format!("The NPT claim failed ({e}); trying again.");
@@ -482,7 +533,11 @@ async fn step(
             let note = swap.npt_note().ok_or("no lock note")?;
             let spent = provider("htlc_spent", network, json!({ "note": note, "from_height": swap.npt_from_height() }), token).await?;
             if spent["spent"] == true {
-                swap.finish(format!("Swap complete: {} is in your Neptune wallet.", swap.want_label()));
+                if spent["by_claim"] == true {
+                    swap.finish(format!("Swap complete: {} is in your Neptune wallet.", swap.want_label()));
+                } else {
+                    swap.finish("The NPT lock was spent after its refund time, not by your claim. Check your Neptune wallet.");
+                }
                 return Ok(());
             }
             if swap.submitted_at.is_none_or(|at| now >= at + RESUBMIT_SECS) {
@@ -499,9 +554,9 @@ async fn step(
         Step::RefundingNpt => {
             if let Some(id) = swap.job.clone() {
                 match job(network, &id, token).await {
-                    None => return Ok(()),
-                    Some(Ok(())) => swap.job = None,
-                    Some(Err(e)) => {
+                    Job::Proving => return Ok(()),
+                    Job::Sent | Job::Gone => swap.job = None,
+                    Job::Failed(e) => {
                         swap.job = None;
                         swap.submitted_at = None;
                         swap.line = format!("The NPT refund failed ({e}); trying again.");
@@ -511,6 +566,11 @@ async fn step(
             let spent = provider("htlc_spent", network, json!({ "swap_id": swap.swap_id() }), token).await?;
             if spent["spent"] == true {
                 swap.finish("Your NPT is back in your wallet. The swap did not happen.");
+                return Ok(());
+            }
+            // A lock that never reached the chain: an hour past its refund time, it never will.
+            if spent["found"] == false && swap.neptune_refund_ms().is_some_and(|ms| now * 1000 > ms + 3_600_000) {
+                swap.finish("Your NPT lock never reached the chain; your NPT stayed in your wallet.");
                 return Ok(());
             }
             if swap.submitted_at.is_none_or(|at| now >= at + RESUBMIT_SECS) {

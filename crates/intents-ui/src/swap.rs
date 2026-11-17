@@ -137,6 +137,9 @@ pub struct Swap {
     /// has not answered (the carrier gives no delivery receipt).
     #[serde(default)]
     pub last_sent: Option<(String, u64)>,
+    /// Gets NPT: the Base lock went to Wallet (it may land later even if the page lost track).
+    #[serde(default)]
+    pub lock_broadcast: bool,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -187,6 +190,7 @@ impl Swap {
             claim_sent: false,
             submitted_at: None,
             last_sent: None,
+            lock_broadcast: false,
         };
         Ok((swap, sealed))
     }
@@ -563,6 +567,23 @@ impl Swap {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(text).ok()
     }
 
+    /// Proving the NPT lock failed: it may or may not have reached the chain. Nothing is sent
+    /// to the solver; at the lock's timeout the refund runs (and ends quietly if the lock
+    /// never landed).
+    pub fn npt_lock_failed(&mut self, why: &str) {
+        self.job = None;
+        self.step = Step::AwaitEvmLock;
+        self.line = format!("The NPT lock did not go through ({why}). If it reached the chain, it comes back after its timeout.");
+    }
+
+    pub fn neptune_refund_ms(&self) -> Option<u64> {
+        self.neptune_refund_ms
+    }
+
+    pub fn evm_refund_after(&self) -> Option<u64> {
+        self.evm_refund_after
+    }
+
     pub fn evm_from_block(&self) -> u64 {
         self.evm_from_block.unwrap_or(0)
     }
@@ -620,7 +641,7 @@ impl Swap {
                 self.step = Step::CheckEvmLock;
                 self.line = "Too late to claim on Base safely. Your NPT comes back after its timeout.".into();
             }
-            Step::AwaitEvmLock | Step::CheckEvmLock if self.neptune_refund_ms.is_some_and(|ms| now * 1000 >= ms) => {
+            Step::AwaitEvmLock | Step::CheckEvmLock | Step::LockingNpt if self.neptune_refund_ms.is_some_and(|ms| now * 1000 >= ms) => {
                 self.step = Step::RefundingNpt;
                 self.line = "The solver did not lock in time. Taking your NPT back.".into();
             }

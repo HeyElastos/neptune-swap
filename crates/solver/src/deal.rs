@@ -44,6 +44,8 @@ pub enum Stage {
     AwaitEvm,
     /// The solver gives NPT: the user's EVM lock checked; claim it once deep enough.
     ClaimEvm,
+    /// A Neptune claim or refund was submitted; done once the lock is seen spent.
+    Settling,
     Done,
     Failed,
 }
@@ -72,6 +74,8 @@ pub struct Deal {
     evm_id: Option<Word>,
     evm_refund_after: u64,
     seen_at: Option<u64>,
+    /// When the Neptune claim or refund was submitted, and which (true: claim).
+    submitted: Option<(u64, bool)>,
     pub line: String,
 }
 
@@ -154,6 +158,7 @@ impl Deal {
             evm_id: None,
             evm_refund_after: 0,
             seen_at: None,
+            submitted: None,
             line: "quoted".into(),
         };
         Ok((deal, bytes))
@@ -237,19 +242,26 @@ impl Deal {
         }
         self.neptune_refund_ms = check["refund_after_ms"].as_u64().context("refund time")?;
         let other = self.intent.body.other_chain();
-        let refund_after = other_refund_at(other, self.neptune_refund_ms / 1000, self.quote.body.other_lock_secs, c.evm.now()?)?;
+        // The refund time is fixed once: a retry after a lock that did land must find that
+        // lock, never make a second one the user could also claim.
+        if self.evm_refund_after == 0 {
+            self.evm_refund_after = other_refund_at(other, self.neptune_refund_ms / 1000, self.quote.body.other_lock_secs, c.evm.now()?)?;
+        }
+        let refund_after = self.evm_refund_after;
         let want = &self.intent.body.want;
         let token = token_of(want.chain, &want.symbol)?;
         let receiver = parse_address(&accept.body.claim_key).context("the user's EVM key")?;
         let hash_lock = parse_word(accept.body.hash_lock.as_deref().context("hash lock")?).context("hash lock")?;
         let amount = self.quote.body.want_amount.units();
-        if token == [0; 20] {
-            c.evm.send(c.wallet, &HTLC_ADDRESS, amount, evm_htlc::lock(&receiver, &hash_lock, refund_after))?;
-        } else {
-            c.evm.send(c.wallet, &token, 0, evm_htlc::approve(&HTLC_ADDRESS, amount))?;
-            c.evm.send(c.wallet, &HTLC_ADDRESS, 0, evm_htlc::lock_token(&token, amount, &receiver, &hash_lock, refund_after))?;
-        }
         let id = evm_htlc::lock_id(&c.wallet.address, &receiver, &token, amount, &hash_lock, refund_after);
+        if lock_view(c.evm, &id)?.sender == [0; 20] {
+            if token == [0; 20] {
+                c.evm.send(c.wallet, &HTLC_ADDRESS, amount, evm_htlc::lock(&receiver, &hash_lock, refund_after))?;
+            } else {
+                c.evm.send(c.wallet, &token, 0, evm_htlc::approve(&HTLC_ADDRESS, amount))?;
+                c.evm.send(c.wallet, &HTLC_ADDRESS, 0, evm_htlc::lock_token(&token, amount, &receiver, &hash_lock, refund_after))?;
+            }
+        }
         ensure!(lock_view(c.evm, &id)?.sender == c.wallet.address, "the EVM lock is not on chain");
         self.evm_id = Some(id);
         self.evm_refund_after = refund_after;
@@ -288,10 +300,12 @@ impl Deal {
             Stage::AwaitEvm | Stage::ClaimEvm if now * 1000 >= self.neptune_refund_ms => {
                 let swap_id = self.swap_id.clone().context("no NPT lock")?;
                 c.neptune.call("htlc_refund", json!({ "swap_id": swap_id, "fee": NPT_FEE }))?;
-                self.stage = Stage::Done;
-                self.line = "the user never locked; NPT refunded".into();
+                self.submitted = Some((now, false));
+                self.stage = Stage::Settling;
+                self.line = "the user never locked; NPT refund submitted".into();
             }
             Stage::ClaimEvm => self.claim_evm(c)?,
+            Stage::Settling => self.settle(c, now)?,
             _ => {}
         }
         Ok(None)
@@ -314,12 +328,33 @@ impl Deal {
                     "from_height": self.from_height,
                 }),
             )?;
-            self.stage = Stage::Done;
-            self.line = "the user claimed; NPT claimed".into();
+            self.submitted = Some((now_secs(), true));
+            self.stage = Stage::Settling;
+            self.line = "the user claimed; NPT claim submitted".into();
         } else if c.evm.now()? >= self.evm_refund_after {
             c.evm.send(c.wallet, &HTLC_ADDRESS, 0, evm_htlc::refund(&id))?;
             self.stage = Stage::Done;
             self.line = "the user never claimed; EVM lock refunded".into();
+        }
+        Ok(())
+    }
+
+    /// A submitted Neptune claim or refund counts once the lock is spent on chain; submitted
+    /// again when it has not landed after a while.
+    fn settle(&mut self, c: &Chains, now: u64) -> Result<()> {
+        let Some((at, claim)) = self.submitted else { return Ok(()) };
+        let spent = if claim {
+            c.neptune.call("htlc_spent", json!({ "note": self.note.clone().context("no note")?, "from_height": self.from_height }))?
+        } else {
+            c.neptune.call("htlc_spent", json!({ "swap_id": self.swap_id }))?
+        };
+        if spent["spent"] == true {
+            self.stage = Stage::Done;
+            self.line = if claim { "NPT claimed (on chain)".into() } else { "NPT refunded (on chain)".into() };
+        } else if now > at + 20 * 60 {
+            // Not landed: back to the step that submits it.
+            self.submitted = None;
+            self.stage = if claim { Stage::AwaitClaim } else { Stage::AwaitEvm };
         }
         Ok(())
     }

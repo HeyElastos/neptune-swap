@@ -322,8 +322,10 @@ impl Wallets {
         let mut start = at.height;
         while start <= tip {
             let end = tip.min(start + BATCH - 1);
-            if let Some(height) = spent_in(&note, at, &blocks(node, start, end)?) {
-                return Ok(json!({ "found": true, "spent": true, "height": height, "depth": tip.saturating_sub(height) + 1, "tip": tip }));
+            if let Some((height, at_ms)) = spent_in(&note, at, &blocks(node, start, end)?) {
+                // Before the refund time only the claim path can spend it.
+                let by_claim = at_ms < note.refund_after_ms;
+                return Ok(json!({ "found": true, "spent": true, "height": height, "depth": tip.saturating_sub(height) + 1, "spent_at_ms": at_ms, "by_claim": by_claim, "tip": tip }));
             }
             start = end + 1;
         }

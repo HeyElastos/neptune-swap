@@ -107,18 +107,18 @@ pub fn locate(note: &HtlcNote, blocks: &[RpcWalletBlock]) -> Option<Located> {
     })
 }
 
-/// The height of the block among `blocks` that spends the note's coin (at `at`), if any.
-pub fn spent_in(note: &HtlcNote, at: Located, blocks: &[RpcWalletBlock]) -> Option<u64> {
+/// The block among `blocks` that spends the note's coin (at `at`), if any: its height, and
+/// the spending transaction's timestamp (ms). A spend timed before the refund time can only
+/// be the claim.
+pub fn spent_in(note: &HtlcNote, at: Located, blocks: &[RpcWalletBlock]) -> Option<(u64, u64)> {
     let index_set = note.index_set(at.aocl_index);
     blocks.iter().find_map(|block| {
         let kernel: BlockKernel = block.kernel.clone().into();
-        kernel
-            .body
-            .transaction_kernel
-            .inputs
+        let tx = &kernel.body.transaction_kernel;
+        tx.inputs
             .iter()
             .any(|rr| rr.absolute_indices == index_set)
-            .then(|| kernel.header.height.into())
+            .then(|| (kernel.header.height.into(), tx.timestamp.to_millis()))
     })
 }
 
