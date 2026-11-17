@@ -71,5 +71,5 @@ built yet, are listed there too ("Risks").
 
 ## License
 
-To be decided by the owner before publishing. neptune-core (Apache-2.0) and the elastOS
-runtime (MIT) keep their own licenses; the files in `patches/` are changes to them.
+MIT, see `LICENSE`. neptune-core (Apache-2.0) and the elastOS runtime (MIT) keep their own
+licenses; the files in `patches/` are changes to them, under those licenses.
