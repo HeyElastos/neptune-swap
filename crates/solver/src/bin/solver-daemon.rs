@@ -93,6 +93,12 @@ fn main() -> Result<()> {
     };
     let evm = Node::local(&config.evm.rpc)?;
     let wallet = Wallet::from_hex(&config.evm.key)?;
+    // A loopback RPC is not proof of a test chain (a local full node, a fork of Base): the
+    // chain must also be young and carry a test chain's id.
+    let height = evm.call("eth_blockNumber", serde_json::json!([]))?;
+    let height = u64::from_str_radix(height.as_str().unwrap_or("0x0").trim_start_matches("0x"), 16)?;
+    let chain_id = evm.chain_id()?;
+    ensure!(height < 1_000_000 && matches!(chain_id, 8453 | 31337), "test networks only: chain {chain_id} at height {height} looks public");
     let chains = Chains { neptune: &neptune, evm: &evm, wallet: &wallet };
     println!("solver {me}\n  NPT {} · EVM {}", neptune.balance()?, evm_htlc::hex(&wallet.address));
 

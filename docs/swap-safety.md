@@ -131,6 +131,24 @@ the NPT giver stalls. Each party proves it knows its key share before any ELA is
 (otherwise a rogue share could make the joint key one party's alone). Not built yet; it
 needs P-256 arithmetic in Triton VM and its own review.
 
+## Tests that hold the contract to the rules
+
+`contracts/htlc-evm/test/NeptuneHtlc.invariant.t.sol`: a handler drives the contract with
+random locks, claims (right and wrong secrets) and refunds (early and late) from several
+parties, 128,000 calls a run, and three invariants must hold after every call: the contract
+holds exactly the open locks; every party holds exactly what the rules give it; no forbidden
+claim or refund went through, no allowed one failed, and no lock paid twice. A stateless
+fuzz test checks that only the exact secret opens a lock and only before its time.
+
+## Must be closed before main net
+
+- The reveal deadline and the step deadlines follow the computer's clock; they must follow
+  Base's block time (needs a block-header read through the Wallet bridge).
+- Base confirmations from the lock's own block, and a re-org depth for Base main net.
+- One swap's Wallet wait pauses the others (the app runs one swap at a time today; keep it so,
+  or run each swap on its own).
+- "Never reached the chain" for an NPT lock must be decided on a fully synced node.
+
 ## Before main net
 
 An independent audit of the Neptune lock script (including its SHA-256 in tasm), the contract,

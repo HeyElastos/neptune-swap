@@ -76,6 +76,9 @@ pub struct Deal {
     seen_at: Option<u64>,
     /// When the Neptune claim or refund was submitted, and which (true: claim).
     submitted: Option<(u64, bool)>,
+    /// The solver gives NPT: its claim on the EVM chain went out, so the secret is public;
+    /// from here it keeps claiming and never takes its NPT back.
+    claim_sent: bool,
     pub line: String,
 }
 
@@ -159,6 +162,7 @@ impl Deal {
             evm_refund_after: 0,
             seen_at: None,
             submitted: None,
+            claim_sent: false,
             line: "quoted".into(),
         };
         Ok((deal, bytes))
@@ -297,7 +301,7 @@ impl Deal {
                 self.line = "the user never locked".into();
             }
             Stage::AwaitClaim => self.await_claim(c)?,
-            Stage::AwaitEvm | Stage::ClaimEvm if now * 1000 >= self.neptune_refund_ms => {
+            Stage::AwaitEvm | Stage::ClaimEvm if now * 1000 >= self.neptune_refund_ms && !self.claim_sent => {
                 let swap_id = self.swap_id.clone().context("no NPT lock")?;
                 c.neptune.call("htlc_refund", json!({ "swap_id": swap_id, "fee": NPT_FEE }))?;
                 self.submitted = Some((now, false));
@@ -350,7 +354,11 @@ impl Deal {
         };
         if spent["spent"] == true {
             self.stage = Stage::Done;
-            self.line = if claim { "NPT claimed (on chain)".into() } else { "NPT refunded (on chain)".into() };
+            self.line = match (claim, spent["by_claim"] == true) {
+                (true, true) => "NPT claimed (on chain)".into(),
+                (true, false) => "the NPT lock was spent after its refund time, not by our claim".into(),
+                (false, _) => "NPT refunded (on chain)".into(),
+            };
         } else if now > at + 20 * 60 {
             // Not landed: back to the step that submits it.
             self.submitted = None;
@@ -364,6 +372,19 @@ impl Deal {
     fn claim_evm(&mut self, c: &Chains) -> Result<()> {
         let id = self.evm_id.context("no EVM lock")?;
         let view = lock_view(c.evm, &id)?;
+        if self.claim_sent {
+            if view.spent {
+                self.stage = Stage::Done;
+                self.line = "claimed on the EVM chain".into();
+                return Ok(());
+            }
+            let secret = c.neptune.call("htlc_secret", json!({ "swap_id": self.swap_id }))?;
+            let secret = parse_word(secret["secret"].as_str().context("secret")?).context("secret")?;
+            c.evm.send(c.wallet, &HTLC_ADDRESS, 0, evm_htlc::claim(&id, &secret))?;
+            self.stage = Stage::Done;
+            self.line = "claimed on the EVM chain (again)".into();
+            return Ok(());
+        }
         let accept = self.accept()?;
         let give = &self.intent.body.give;
         let hash_lock = parse_word(self.quote.body.hash_lock.as_deref().context("hash lock")?).context("hash lock")?;
@@ -393,6 +414,7 @@ impl Deal {
         }
         let secret = c.neptune.call("htlc_secret", json!({ "swap_id": self.swap_id }))?;
         let secret = parse_word(secret["secret"].as_str().context("secret")?).context("secret")?;
+        self.claim_sent = true;
         c.evm.send(c.wallet, &HTLC_ADDRESS, 0, evm_htlc::claim(&id, &secret))?;
         self.stage = Stage::Done;
         self.line = "claimed on the EVM chain; the user claims the NPT next".into();
