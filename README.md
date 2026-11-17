@@ -78,7 +78,7 @@ open an issue or a pull request, and let us build it together.
 | `capsules/` | The capsule and provider manifests and the page shell. |
 | `patches/` | The wasm32 patch for neptune-core v0.20.1 and the elastOS runtime v2.0.1 patch. |
 | `scripts/` | Vendoring, builds, a local regtest node, an isolated development Home. |
-| `docs/` | Swap safety rules, the general Runtime features this app needs, the Wallet bridge and carrier routes. |
+| `docs/` | Swap safety rules, the general Runtime features this app needs, a test-network setup, the Wallet bridge and carrier routes. |
 | `PLAN.md` | Design, rules, state and findings in detail. |
 
 ## Building

@@ -22,16 +22,7 @@ BOB=$($CAST wallet address --private-key $BOB_KEY)
 ZERO=0x0000000000000000000000000000000000000000
 echo "chain $($CAST chain-id --rpc-url "$RPC"), Alice $ALICE locks, Bob $BOB receives"
 
-# The one address the app accepts: CREATE2 from the deterministic deployment proxy (anvil
-# has it at the same address as Base) with salt 0 and the checked-in creation code.
-DEPLOYER=0x4e59b44847b379578588920ca78fbf26c0b4956c
-CONTRACT=0xc85855fc2f80136ed6f2fbe465ff5c2937e02822
-if [ "$($CAST code $CONTRACT --rpc-url "$RPC")" = "0x" ]; then
-  $CAST send $DEPLOYER 0x$(printf '%064d' 0)$(cat contracts/htlc-evm/NeptuneHtlc.init.hex) \
-    --private-key $ALICE_KEY --rpc-url "$RPC" >/dev/null
-fi
-[ "$($CAST keccak "$($CAST code $CONTRACT --rpc-url "$RPC")")" = 0xda6b4d8a99e7065db772ffee9a41063b6c650e37a5537dcb19c2c9a4fb20fa3b ] \
-  || { echo "NeptuneHtlc is not at $CONTRACT" >&2; exit 1; }
+CONTRACT=$(scripts/deploy-htlc-local.sh "$RPC")
 echo "NeptuneHtlc at $CONTRACT"
 
 now() { $CAST block latest --field timestamp --rpc-url "$RPC"; }
