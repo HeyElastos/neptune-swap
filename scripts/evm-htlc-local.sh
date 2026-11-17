@@ -10,7 +10,6 @@ cd "$(dirname "$0")/.."
 RPC="${EVM_RPC:-http://127.0.0.1:8545}"
 case "$RPC" in http://127.0.0.1:*|http://localhost:*) ;; *) echo "refusing non-local RPC $RPC" >&2; exit 1 ;; esac
 CAST=~/.foundry/bin/cast
-FORGE=~/.foundry/bin/forge
 cargo build -q -p evm-htlc --example calldata
 CD=target/debug/examples/calldata
 
@@ -23,8 +22,16 @@ BOB=$($CAST wallet address --private-key $BOB_KEY)
 ZERO=0x0000000000000000000000000000000000000000
 echo "chain $($CAST chain-id --rpc-url "$RPC"), Alice $ALICE locks, Bob $BOB receives"
 
-CONTRACT=$(cd contracts/htlc-evm && $FORGE create src/NeptuneHtlc.sol:NeptuneHtlc --rpc-url "$RPC" \
-  --private-key $ALICE_KEY --broadcast 2>/dev/null | awk '/Deployed to:/ {print $3}')
+# The one address the app accepts: CREATE2 from the deterministic deployment proxy (anvil
+# has it at the same address as Base) with salt 0 and the checked-in creation code.
+DEPLOYER=0x4e59b44847b379578588920ca78fbf26c0b4956c
+CONTRACT=0xc85855fc2f80136ed6f2fbe465ff5c2937e02822
+if [ "$($CAST code $CONTRACT --rpc-url "$RPC")" = "0x" ]; then
+  $CAST send $DEPLOYER 0x$(printf '%064d' 0)$(cat contracts/htlc-evm/NeptuneHtlc.init.hex) \
+    --private-key $ALICE_KEY --rpc-url "$RPC" >/dev/null
+fi
+[ "$($CAST keccak "$($CAST code $CONTRACT --rpc-url "$RPC")")" = 0xda6b4d8a99e7065db772ffee9a41063b6c650e37a5537dcb19c2c9a4fb20fa3b ] \
+  || { echo "NeptuneHtlc is not at $CONTRACT" >&2; exit 1; }
 echo "NeptuneHtlc at $CONTRACT"
 
 now() { $CAST block latest --field timestamp --rpc-url "$RPC"; }

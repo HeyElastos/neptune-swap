@@ -153,7 +153,7 @@ impl User {
         // The ETH refund must come well before the NPT refund, and there must be
         // time to claim before it.
         let neptune_refund = self.neptune_refund_ms / 1000;
-        ensure!(lock.refund_after + Chain::Base.gap_secs() <= neptune_refund, "the ETH lock refunds too late");
+        ensure!(lock.refund_after.saturating_add(Chain::Base.gap_secs()) <= neptune_refund, "the ETH lock refunds too late");
         let evm_now = evm.node.now()?;
         ensure!(may_reveal(Chain::Base, lock.refund_after, evm_now), "too late to reveal the secret safely");
         let secret = self.neptune.call("htlc_secret", json!({ "swap_id": self.swap_id }))?;

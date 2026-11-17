@@ -30,8 +30,10 @@ Calldata: `crates/evm-htlc` (no heavy deps; builds for wasm32):
 - lock ETH: `evm_htlc::lock(receiver, hash_lock, refund_after_secs)`, value = amount in wei (hex).
 - claim: `evm_htlc::claim(id, secret)`; refund: `evm_htlc::refund(id)`; id = `evm_htlc::lock_id(sender, receiver, [0;20], amount, hash_lock, refund_after)`.
 - the secret from a receipt: `evm_htlc::claimed_secret(&Log{address, topics, data}, contract, id, hash_lock)`.
-Contract: `contracts/htlc-evm` (deploy on the local chain: see `scripts/evm-htlc-local.sh`, forge create).
-A lock counts only in a contract whose `eth_getCode` hashes to `evm_htlc::RUNTIME_CODE_KECCAK`
-(the build is reproducible: no metadata), whoever deployed it. The capsule's side is
+Contract: `contracts/htlc-evm` (deploy on the local chain: see `scripts/evm-htlc-local.sh`).
+It lives at one address on every chain, `evm_htlc::HTLC_ADDRESS`: CREATE2 from the
+deterministic deployment proxy with salt 0 and the reproducible creation code (no metadata).
+A lock counts only there; matching the code alone is not enough, since other creation code
+could pre-fill storage with fake locks. The capsule's side is
 `crates/intents-ui/src/evm_leg.rs`.
 Hash lock = SHA-256 of the 32-byte secret, the same as the Neptune HTLC note's `hash_lock`.

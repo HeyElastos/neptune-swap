@@ -13,16 +13,48 @@ use sha3::Keccak256;
 pub type Address = [u8; 20];
 pub type Word = [u8; 32];
 
-/// keccak256 of `NeptuneHtlc`'s deployed code, built from `contracts/htlc-evm` with its
-/// `foundry.toml` (no metadata, so the build is reproducible). A lock counts only in a
-/// contract whose code (`eth_getCode`) has this hash: the contract is recognized by what it
-/// does, never by its address or by who deployed it, so no registry or deployer is trusted.
+/// The deterministic deployment proxy (the same address on Base, Ethereum and a local
+/// anvil chain): `CREATE2` from it with a salt puts code at an address that depends only on
+/// that salt and the creation code.
+pub const CREATE2_DEPLOYER: Address = [
+    0x4e, 0x59, 0xb4, 0x48, 0x47, 0xb3, 0x79, 0x57, 0x85, 0x88, 0x92, 0x0c, 0xa7, 0x8f, 0xbf, 0x26, 0xc0, 0xb4, 0x95, 0x6c,
+];
+pub const SALT: Word = [0; 32];
+
+/// keccak256 of `NeptuneHtlc`'s creation code (`NeptuneHtlc.init.hex`), built from
+/// `contracts/htlc-evm` with its `foundry.toml` (no metadata, so the build is reproducible).
+pub const INIT_CODE_KECCAK: Word = [
+    0x89, 0xa6, 0xd4, 0x62, 0x2f, 0x91, 0x05, 0xee, 0x4c, 0x97, 0xe4, 0x34, 0x3b, 0x19, 0x42, 0x2b,
+    0xb4, 0x0e, 0x5d, 0x46, 0x7a, 0x55, 0xf7, 0x85, 0x7b, 0xc6, 0xaa, 0xee, 0x32, 0xd7, 0xae, 0x83,
+];
+
+/// keccak256 of the code that creation code leaves deployed (`NeptuneHtlc.runtime.hex`).
 pub const RUNTIME_CODE_KECCAK: Word = [
     0xda, 0x6b, 0x4d, 0x8a, 0x99, 0xe7, 0x06, 0x5d, 0xb7, 0x72, 0xff, 0xee, 0x9a, 0x41, 0x06, 0x3b,
     0x6c, 0x65, 0x0e, 0x37, 0xa5, 0x53, 0x7d, 0xcb, 0x19, 0xc2, 0xc9, 0xa4, 0xfb, 0x20, 0xfa, 0x3b,
 ];
 
-/// Whether `code` (as `eth_getCode` returns it) is `NeptuneHtlc`.
+/// **The** swap contract, on every chain: `CREATE2` from [`CREATE2_DEPLOYER`] with [`SALT`]
+/// and the creation code above. Anyone may deploy it (the result is the same), and nobody can
+/// put other code or pre-filled storage there: the address commits to the creation code,
+/// which starts with empty storage. A lock counts only at this address. Matching the code
+/// alone would not do: other creation code can write fake locks into storage and then leave
+/// the same runtime code behind.
+pub const HTLC_ADDRESS: Address = [
+    0xc8, 0x58, 0x55, 0xfc, 0x2f, 0x80, 0x13, 0x6e, 0xd6, 0xf2, 0xfb, 0xe4, 0x65, 0xff, 0x5c, 0x29, 0x37, 0xe0, 0x28, 0x22,
+];
+
+/// The address `CREATE2` gives creation code with this hash.
+pub fn create2_address(deployer: &Address, salt: &Word, init_code_keccak: &Word) -> Address {
+    let mut bytes = vec![0xff];
+    bytes.extend_from_slice(deployer);
+    bytes.extend_from_slice(salt);
+    bytes.extend_from_slice(init_code_keccak);
+    keccak(&bytes)[12..].try_into().unwrap()
+}
+
+/// Whether `code` (as `eth_getCode` returns it at [`HTLC_ADDRESS`]) is the deployed contract:
+/// a check that it has been deployed on this chain, not a substitute for the address.
 pub fn is_htlc_code(code: &[u8]) -> bool {
     keccak(code) == RUNTIME_CODE_KECCAK
 }
@@ -259,7 +291,11 @@ mod tests {
     }
 
     #[test]
-    fn the_pinned_code_hash_is_the_checked_in_build() {
+    fn the_pinned_address_and_code_are_the_checked_in_build() {
+        let init = parse_hex(include_str!("../../../contracts/htlc-evm/NeptuneHtlc.init.hex")).unwrap();
+        assert_eq!(keccak(&init), INIT_CODE_KECCAK);
+        assert_eq!(create2_address(&CREATE2_DEPLOYER, &SALT, &INIT_CODE_KECCAK), HTLC_ADDRESS);
+        assert_eq!(hex(&HTLC_ADDRESS), "0xc85855fc2f80136ed6f2fbe465ff5c2937e02822");
         let code = parse_hex(include_str!("../../../contracts/htlc-evm/NeptuneHtlc.runtime.hex")).unwrap();
         assert!(is_htlc_code(&code));
         assert!(!is_htlc_code(&code[1..]));
@@ -269,7 +305,11 @@ mod tests {
             let at = json.find("\"deployedBytecode\"").unwrap();
             let start = json[at..].find("\"object\":\"").unwrap() + at + 10;
             let end = json[start..].find('"').unwrap() + start;
-            assert_eq!(parse_hex(&json[start..end]).unwrap(), code, "rebuild changed the code: update the pin");
+            assert_eq!(parse_hex(&json[start..end]).unwrap(), code, "rebuild changed the code: update the pins");
+            let at = json.find("\"bytecode\"").unwrap();
+            let start = json[at..].find("\"object\":\"").unwrap() + at + 10;
+            let end = json[start..].find('"').unwrap() + start;
+            assert_eq!(parse_hex(&json[start..end]).unwrap(), init, "rebuild changed the creation code: update the pins");
         }
     }
 

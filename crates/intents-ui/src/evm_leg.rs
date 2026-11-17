@@ -2,15 +2,16 @@
 //! builds the calldata and checks what it reads from the chain; Wallet holds the key, shows
 //! each transaction and asks the user to approve it (passkey, MetaMask, as set up there).
 //!
-//! Nothing here trusts a message: a counterparty's lock is read from the chain itself, in a
-//! contract recognized by its code hash, and checked against the agreed terms and the
-//! Neptune lock's refund time before anything is locked or revealed.
+//! Nothing here trusts a message: a counterparty's lock is read from the chain itself, only
+//! in the one swap contract (`evm_htlc::HTLC_ADDRESS`, fixed by its creation code, never
+//! taken from a message), and checked against the agreed terms and the Neptune lock's refund
+//! time before anything is locked or revealed.
 
 // The swap flow that drives these steps comes next (PLAN.md, "EVM leg"); until then only
 // the Wallet connection uses this module.
 #![allow(dead_code)]
 
-use evm_htlc::{decode_lock, hex, parse_address, parse_hex, parse_word, Address, LockView, Word};
+use evm_htlc::{decode_lock, hex, parse_address, parse_hex, parse_word, Address, LockView, Word, HTLC_ADDRESS};
 use intents_protocol::{asset_row, may_reveal, Chain};
 use serde_json::{json, Value};
 
@@ -45,6 +46,16 @@ pub struct Tx {
     pub what: String,
 }
 
+/// The contract an `evm_locked` message names must be the swap contract itself. Any other
+/// address is refused, even one holding the same code: its creation code could have
+/// written fake locks into its storage.
+pub fn check_named_contract(named_hex: &str) -> Result<(), String> {
+    match parse_address(named_hex) {
+        Some(a) if a == HTLC_ADDRESS => Ok(()),
+        _ => Err("The solver named another contract than the swap contract.".into()),
+    }
+}
+
 /// The token contract of `symbol` on `chain`: None for the chain's native coin.
 pub fn token_of(chain: Chain, symbol: &str) -> Result<Option<Address>, String> {
     let (_, token) = asset_row(chain, symbol).ok_or(format!("{symbol} is not listed on this chain"))?;
@@ -53,7 +64,8 @@ pub fn token_of(chain: Chain, symbol: &str) -> Result<Option<Address>, String> {
 
 /// The transactions that lock `amount` for `receiver`: one call with the coin as value, or
 /// an exact approval of the token followed by the lock.
-pub fn lock_txs(contract: &Address, token: Option<Address>, amount: u128, receiver: &Address, hash_lock: &Word, refund_after: u64, label: &str) -> Vec<Tx> {
+pub fn lock_txs(token: Option<Address>, amount: u128, receiver: &Address, hash_lock: &Word, refund_after: u64, label: &str) -> Vec<Tx> {
+    let contract = &HTLC_ADDRESS;
     match token {
         None => vec![Tx { to: *contract, value: amount, data: evm_htlc::lock(receiver, hash_lock, refund_after), what: format!("Lock {label} for the swap") }],
         Some(token) => vec![
@@ -63,12 +75,12 @@ pub fn lock_txs(contract: &Address, token: Option<Address>, amount: u128, receiv
     }
 }
 
-pub fn claim_tx(contract: &Address, id: &Word, secret: &Word, label: &str) -> Tx {
-    Tx { to: *contract, value: 0, data: evm_htlc::claim(id, secret), what: format!("Claim {label}") }
+pub fn claim_tx(id: &Word, secret: &Word, label: &str) -> Tx {
+    Tx { to: HTLC_ADDRESS, value: 0, data: evm_htlc::claim(id, secret), what: format!("Claim {label}") }
 }
 
-pub fn refund_tx(contract: &Address, id: &Word, label: &str) -> Tx {
-    Tx { to: *contract, value: 0, data: evm_htlc::refund(id), what: format!("Take back {label}") }
+pub fn refund_tx(id: &Word, label: &str) -> Tx {
+    Tx { to: HTLC_ADDRESS, value: 0, data: evm_htlc::refund(id), what: format!("Take back {label}") }
 }
 
 /// What a counterparty's lock must be, from the agreed terms.
@@ -160,34 +172,57 @@ pub async fn read(namespace: &str, method: &str, params: Value, token: &str) -> 
     Ok(reply["result"].clone())
 }
 
-/// Checks that `contract` holds the swap contract's code, whoever deployed it.
-pub async fn check_contract(namespace: &str, contract: &Address, token: &str) -> Result<(), String> {
-    let code = read(namespace, "eth_getCode", json!([hex(contract), "latest"]), token).await?;
+/// Checks that the swap contract is deployed on this chain (anyone may deploy it, and the
+/// address fixes what it is).
+pub async fn check_contract(namespace: &str, token: &str) -> Result<(), String> {
+    let code = read(namespace, "eth_getCode", json!([hex(&HTLC_ADDRESS), "latest"]), token).await?;
     let code = code.as_str().and_then(parse_hex).ok_or("Chain read: no code")?;
     if evm_htlc::is_htlc_code(&code) {
         Ok(())
     } else {
-        Err("That address is not the swap contract.".into())
+        Err("The swap contract is not deployed on this chain yet.".into())
     }
 }
 
-/// A lock as the contract holds it.
-pub async fn lock_view(namespace: &str, contract: &Address, id: &Word, token: &str) -> Result<LockView, String> {
-    let ret = read(namespace, "eth_call", json!([{ "to": hex(contract), "data": hex(&evm_htlc::locks(id)) }, "latest"]), token).await?;
+/// A lock as the swap contract holds it.
+pub async fn lock_view(namespace: &str, id: &Word, token: &str) -> Result<LockView, String> {
+    let ret = read(namespace, "eth_call", json!([{ "to": hex(&HTLC_ADDRESS), "data": hex(&evm_htlc::locks(id)) }, "latest"]), token).await?;
     ret.as_str().and_then(parse_hex).as_deref().and_then(decode_lock).ok_or("The contract gave no lock.".into())
 }
 
-/// The secret a claim of `id` published, if it has been claimed.
-pub async fn claimed_secret(namespace: &str, contract: &Address, id: &Word, hash_lock: &Word, token: &str) -> Result<Option<Word>, String> {
+/// Blocks per `eth_getLogs` call: public RPCs cap the range.
+pub const LOG_PAGE: u64 = 2_000;
+
+/// The block ranges from `from` to `latest`, `LOG_PAGE` at a time.
+pub fn log_pages(from: u64, latest: u64) -> Vec<(u64, u64)> {
+    (from..=latest).step_by(LOG_PAGE as usize).map(|start| (start, latest.min(start + LOG_PAGE - 1))).collect()
+}
+
+/// The secret a claim of `id` published, if it has been claimed: searched from `from_block`
+/// (the block of the user's own lock, from its receipt), page by page. The caller keeps
+/// asking until its Neptune claim deadline.
+pub async fn claimed_secret(namespace: &str, id: &Word, hash_lock: &Word, from_block: u64, token: &str) -> Result<Option<Word>, String> {
+    let latest = read(namespace, "eth_blockNumber", json!([]), token).await?;
+    let latest = latest.as_str().and_then(|h| u64::from_str_radix(h.trim_start_matches("0x"), 16).ok()).ok_or("Chain read: no height")?;
     let topic = hex(&evm_htlc::keccak(b"Claimed(bytes32,bytes32)"));
-    let filter = json!({ "address": hex(contract), "topics": [topic, hex(id)], "fromBlock": "earliest", "toBlock": "latest" });
-    let logs = read(namespace, "eth_getLogs", json!([filter]), token).await?;
-    Ok(secret_from_logs(&logs, contract, id, hash_lock))
+    for (start, end) in log_pages(from_block, latest) {
+        let filter = json!({ "address": hex(&HTLC_ADDRESS), "topics": [topic, hex(id)], "fromBlock": format!("0x{start:x}"), "toBlock": format!("0x{end:x}") });
+        let logs = read(namespace, "eth_getLogs", json!([filter]), token).await?;
+        if let Some(secret) = secret_from_logs(&logs, &HTLC_ADDRESS, id, hash_lock) {
+            return Ok(Some(secret));
+        }
+    }
+    Ok(None)
 }
 
 /// Sends `tx` from `account`: Wallet shows it and the user approves, then it is broadcast
 /// and its receipt awaited. Returns the transaction hash. `waiting` gets a line for the
 /// screen at each stage.
+///
+/// A claim is a reveal as soon as it leaves the page: its calldata carries the secret, and
+/// a claim that reverts or is not mined has still shown it to Wallet, the RPC and, once
+/// broadcast, everyone. The swap flow must then keep claiming until it lands, and never
+/// treat an error here as "safe to wait for the Neptune refund".
 pub async fn send(namespace: &str, account: &Account, tx: &Tx, token: &str, waiting: &dyn Fn(String)) -> Result<String, String> {
     let (page_url, origin) = runtime::page_and_origin();
     let from = hex(&account.address);
@@ -230,7 +265,7 @@ pub async fn send(namespace: &str, account: &Account, tx: &Tx, token: &str, wait
 mod tests {
     use super::*;
 
-    const CONTRACT: Address = [0xcc; 20];
+    const CONTRACT: Address = HTLC_ADDRESS;
     const SOLVER: Address = [0x50; 20];
     const USER: Address = [0x05; 20];
 
@@ -269,10 +304,10 @@ mod tests {
         let usdc = token_of(Chain::Base, "USDC").unwrap().unwrap();
         assert_eq!(hex(&usdc), "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
         assert!(token_of(Chain::Base, "ELA").is_err());
-        let eth = lock_txs(&CONTRACT, None, 5, &SOLVER, &[7; 32], 9, "0.5 ETH");
+        let eth = lock_txs(None, 5, &SOLVER, &[7; 32], 9, "0.5 ETH");
         assert_eq!(eth.len(), 1);
         assert_eq!((eth[0].to, eth[0].value), (CONTRACT, 5));
-        let usdc_txs = lock_txs(&CONTRACT, Some(usdc), 250_000_000, &SOLVER, &[7; 32], 9, "250 USDC");
+        let usdc_txs = lock_txs(Some(usdc), 250_000_000, &SOLVER, &[7; 32], 9, "250 USDC");
         assert_eq!(usdc_txs.len(), 2);
         assert_eq!((usdc_txs[0].to, usdc_txs[0].value), (usdc, 0));
         assert_eq!(usdc_txs[0].data, evm_htlc::approve(&CONTRACT, 250_000_000));
@@ -292,6 +327,18 @@ mod tests {
         assert_eq!(secret_from_logs(&logs, &CONTRACT, &id, &lock), Some(secret));
         assert_eq!(secret_from_logs(&json!([log(&CONTRACT, &id, &[4; 32])]), &CONTRACT, &id, &lock), None, "does not open the lock");
         assert_eq!(secret_from_logs(&json!({}), &CONTRACT, &id, &lock), None);
+    }
+
+    #[test]
+    fn only_the_swap_contract_is_accepted_and_logs_are_read_in_pages() {
+        assert_eq!(check_named_contract("c85855fc2f80136ed6f2fbe465ff5c2937e02822"), Ok(()));
+        assert!(check_named_contract("0xcccccccccccccccccccccccccccccccccccccccc").is_err());
+        assert!(check_named_contract("nonsense").is_err());
+        assert_eq!(claim_tx(&[1; 32], &[2; 32], "x").to, HTLC_ADDRESS);
+        assert_eq!(refund_tx(&[1; 32], "x").to, HTLC_ADDRESS);
+        assert_eq!(log_pages(10, 10), vec![(10, 10)]);
+        assert_eq!(log_pages(0, 4_500), vec![(0, 1_999), (2_000, 3_999), (4_000, 4_500)]);
+        assert!(log_pages(5, 4).is_empty());
     }
 
     #[test]

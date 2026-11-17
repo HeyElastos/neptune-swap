@@ -79,7 +79,7 @@ all of them.
 ## Resume here (2026-11-17)
 
 Done today: the EVM leg's building blocks (see "EVM leg" below): Base in the protocol, the
-contract recognized by its code hash, `crates/intents-ui/src/evm_leg.rs` (Wallet bridge
+contract at one address fixed by its creation code (CREATE2), `crates/intents-ui/src/evm_leg.rs` (Wallet bridge
 transactions, chain reads, lock checks, the secret from `Claimed` logs), the form on Base,
 and a runtime fork change that lets the app make typed chain reads. Not yet: the swap flow
 that drives these steps in the app (taker first), and a live run in the dev Home.
@@ -487,12 +487,24 @@ refund before T refused → refund after T (giver 4.75 → 4.65). What this does
   distinct from Ethereum main net's. Ethereum main net stays in the protocol for native
   solvers; the app offers Base only. ESC was tried and dropped (user 2026-11-17: ELA on the
   main chain, not ESC).
-- **The contract is recognized by its code, not its address.** `contracts/htlc-evm` builds
-  without metadata (`foundry.toml`), so the deployed code is reproducible;
-  `evm_htlc::RUNTIME_CODE_KECCAK` pins its keccak and `NeptuneHtlc.runtime.hex` is the
-  checked-in build (a test compares a fresh Foundry build with it). Anyone may deploy it;
-  a lock counts only in a contract whose `eth_getCode` hashes to the pin. No registry, no
-  deployer to trust. The contract is MIT now (was UNLICENSED).
+- **One contract address on every chain, fixed by its creation code.** `contracts/htlc-evm`
+  builds without metadata (`foundry.toml`), so its creation and runtime code are
+  reproducible (`NeptuneHtlc.init.hex`, `NeptuneHtlc.runtime.hex`; a test compares a fresh
+  Foundry build with them). It is deployed by `CREATE2` from the deterministic deployment
+  proxy (`0x4e59…956c`) with salt 0, which puts it at `evm_htlc::HTLC_ADDRESS`
+  (`0xc858…2822`) wherever that proxy exists (Base, a local anvil). Anyone may deploy it;
+  nobody can put anything else there. A lock counts only at that address, and an
+  `evm_locked` naming another is refused (`evm_leg::check_named_contract`). The independent
+  review (2026-11-17) found that matching the runtime code alone is not enough: other
+  creation code can pre-fill storage with fake locks and then leave identical runtime code,
+  so a solver could make the user reveal the secret into an empty contract. The code hash
+  stays as a check that the contract is deployed. MIT now (was UNLICENSED).
+- Review follow-ups: logs are read in pages of 2,000 blocks from the user's own lock block
+  (public RPCs cap `eth_getLogs`); a claim counts as a reveal once it leaves the page, so the
+  swap flow must keep claiming and never fall back to waiting for the Neptune refund;
+  `saturating_add` in the native solver's refund check. Open: the chain's own clock for
+  `may_reveal` (needs a block-header read in the bridge), a block-range cap on the fork's
+  `eth_getLogs`, a fork test for `APP_CHAIN_READS`.
 - `crates/intents-ui/src/evm_leg.rs`: `lock_txs` (ETH: one call with value; USDC: an exact
   `approve` then `lockToken`), `claim_tx`, `refund_tx`, `check_lock` (terms, unspent, refund
   at least the chain's gap before the Neptune refund, `may_reveal`), `secret_from_logs`;
