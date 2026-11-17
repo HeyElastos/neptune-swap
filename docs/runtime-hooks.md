@@ -83,9 +83,11 @@ pending request at a time, and never asks again while a request is open.
 - A provider operation marked `approval: user` in the manifest goes through a Home approval
   per user before the Runtime forwards it, with the manifest's description as the prompt.
   The Runtime keeps the answer for a declared time and rate-limits re-asking.
-- Providers declare their network reach in the manifest (here: a loopback node address
-  only, and two named price hosts when approved), and the Runtime enforces it; today the
-  provider restricts itself.
+- Providers declare their rights in the manifest and the Runtime enforces them; today the
+  provider restricts itself. The neptune provider's draft is
+  `capsules/neptune-provider/rights.json`: connect to the loopback node only, to two price
+  hosts only after approval, listen nowhere, exec only the `neptune-prover` binary from its
+  own bundle (real proving runs out of process), files only in its data folder.
 
 ## 6. Installing a signed outside app
 

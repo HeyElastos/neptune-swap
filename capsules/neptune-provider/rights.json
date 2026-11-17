@@ -1,0 +1,45 @@
+{
+  "schema": "neptune-swap/provider-rights/draft-1",
+  "note": "Draft of the rights the neptune provider needs, for the Runtime's provider lockdown. Not read by Runtime v2.0.1 (its manifest refuses unknown fields); to move into the provider manifest's rights field once its format is set.",
+  "provider": "neptune-provider",
+  "network": {
+    "listen": [],
+    "connect": [
+      {
+        "to": "127.0.0.1",
+        "ports": [9797],
+        "protocol": "http",
+        "why": "JSON-RPC of the local, outbound-only neptune-core node (port from the Home's provider config; loopback IP literals only, no DNS)"
+      },
+      {
+        "to": "api.coingecko.com",
+        "ports": [443],
+        "protocol": "https",
+        "when": "only after the user approves USD prices in Home, and only when the Home's config sets price_sources",
+        "why": "USD reference prices for display"
+      },
+      {
+        "to": "api.kraken.com",
+        "ports": [443],
+        "protocol": "https",
+        "when": "as for api.coingecko.com",
+        "why": "a second source for the same prices"
+      }
+    ],
+    "development_only": "scripts/dev-home.sh points neptune-main at a public node over https (allow_remote_nodes); a locked-down provider gets loopback only."
+  },
+  "exec": [
+    {
+      "program": "neptune-prover",
+      "location": "next to the provider binary, in the same signed bundle",
+      "why": "Triton VM proving runs out of process (neptune-core's prover job queue); regtest uses mock proofs and execs nothing"
+    }
+  ],
+  "files": {
+    "read_write": ["$NEPTUNE_PROVIDER_DATA"],
+    "why": "per-network wallet state, the seed phrase and open swap secrets (owner-only 0600 files), the swap journal"
+  },
+  "env": ["NEPTUNE_PROVIDER_CONFIG", "NEPTUNE_PROVIDER_DATA"],
+  "threads": "background proving jobs",
+  "memory": "real proving needs several GB in the prover process"
+}
