@@ -91,10 +91,10 @@ First, tomorrow:
    `scripts/dev-home.sh` (the dev Home was stopped by the rebuild, exit 75).
 3. **Check the manifest loads**: the app at http://localhost:61180/apps/neptune-swap/ (200),
    and that Home lists it (the manifest gained methods; `CapsuleManifest::validate` runs at load).
-4. **Live tests in the dev Home** (the user unlocks it in the browser pane): Show USD prices
+4. **Live tests in the dev Home** (unlock it in the browser first): Show USD prices
    (approve in Home), Connect elastOS Wallet (Base), Show open offers, publish an offer on the
    Offer page, then the carrier test between the gateway's node and the managed runtime's node
-   (`target/release/examples/carrier_probe`, see the M9 note).
+   (`target/release/examples/carrier_probe`, see `docs/carrier-route.md`).
 5. **Main-net send by the user** (small amount, fee 0.1) with the light node's own proofs.
 
 Next to build: answering takers' sealed requests from the app (solver side), the capsule's EVM

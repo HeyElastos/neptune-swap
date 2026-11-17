@@ -4,3 +4,4 @@ dist/
 capsules/neptune-swap/browser/pkg/
 capsule/bench/pkg/
 capsule/bench/*.json.gz
+screenshots/
