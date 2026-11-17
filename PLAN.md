@@ -544,6 +544,10 @@ side, here Neptune, and the ELA side is just a key nobody holds alone.
 - Unlike today's HTLC (whose claim publishes nothing on Neptune), these paths must publish a
   value: Neptune transaction kernels carry public announcements, and the lock script can
   require one.
+- **Rogue keys:** before any ELA is paid, each party proves it knows its share (a
+  signature with `xe` over `Pe`, with `xn` over `Pn`, bound to the deal). Without that, the
+  NPT giver could pick `Pn = Q − Pe` for a `q` it knows, making `P = Q` its key alone, and
+  take the ELA. The same check guards the other direction.
 - The cost: P-256 scalar multiplication in tasm (256-bit field arithmetic on u32 limbs;
   millions of cycles, proved by the claimer). That is the main work, and the main thing to
   review. To check first: that kernel announcements are bound into what the lock script

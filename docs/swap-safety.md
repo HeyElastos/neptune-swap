@@ -104,8 +104,9 @@ claim (`htlc_secret`, declared as a `rights` method).
 The main chain has no hash lock and no refund path, so ELA swaps there use a scriptless swap
 (PLAN.md, "ELA main chain"): ELA is paid to a key split between the two parties, and the
 Neptune lock script forces the right half public on claim or refund, with a punish path if
-the NPT giver stalls. Not built yet; it needs P-256 arithmetic in Triton VM and its own
-review.
+the NPT giver stalls. Each party proves it knows its key share before any ELA is paid
+(otherwise a rogue share could make the joint key one party's alone). Not built yet; it
+needs P-256 arithmetic in Triton VM and its own review.
 
 ## Before main net
 
