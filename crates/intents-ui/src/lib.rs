@@ -8,6 +8,8 @@ mod intent;
 mod offers;
 mod offers_ui;
 mod qr;
+#[allow(dead_code)] // driven by swap_ui (next commit)
+mod swap;
 mod runtime;
 mod usd;
 mod wallet_ui;

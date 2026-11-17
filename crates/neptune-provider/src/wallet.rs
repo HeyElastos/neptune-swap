@@ -8,7 +8,10 @@
 //! - `state.json`: light-core's `WalletState` (coins, sync point). Private, but
 //!   it cannot spend.
 
+mod journal;
 mod swaps;
+
+pub use swaps::Proving;
 
 use std::fs;
 use std::io::Write;
@@ -44,7 +47,8 @@ enum JobState {
 struct Job {
     network_id: String,
     state: std::sync::Arc<std::sync::Mutex<JobState>>,
-    pending: light_core::history::PendingSend,
+    /// A payment's pending entry for the history; swap locks, claims and refunds have none.
+    pending: Option<light_core::history::PendingSend>,
     reply: Value,
 }
 
@@ -212,17 +216,33 @@ impl Wallets {
         };
         let proofs = if basis.own { "own" } else { "node" };
         let mut jobs = self.jobs.lock().map_err(|_| anyhow::anyhow!("jobs lock"))?;
-        if jobs.values().any(|j| j.network_id == network_id && matches!(*j.state.lock().unwrap(), JobState::Proving)) {
+        if Self::proving(&jobs, network_id) {
             bail!("a payment is still being proven; wait for it first");
         }
         let (details, built) = wallet.build_payment(to, &plan, basis, now_ms)?;
         // The change key index moved on: keep it, so no later payment reuses it.
         self.save_state(network_id, &wallet)?;
 
+        let reply = json!({ "sent": amount.trim(), "fee": fee.trim(), "inputs": built.inputs, "change": built.change, "proofs": proofs });
+        let id = Self::spawn_job(&mut jobs, network_id, details.primitive_witness(), network, node, Some(wallet.pending_for(&plan, now_ms)), reply, now_ms);
+        Ok(json!({ "job": id, "state": "proving", "proofs": proofs }))
+    }
+
+    /// Proves and submits `witness` on a background thread; `job_status` follows it.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_job(
+        jobs: &mut std::collections::HashMap<String, Job>,
+        network_id: &str,
+        witness: light_core::neptune_consensus::transaction::primitive_witness::PrimitiveWitness,
+        network: Network,
+        node: &dyn Node,
+        pending: Option<light_core::history::PendingSend>,
+        reply: Value,
+        now_ms: u64,
+    ) -> String {
         let id = format!("{now_ms:x}-{}", jobs.len());
         let state = std::sync::Arc::new(std::sync::Mutex::new(JobState::Proving));
         let (job_state, job_node) = (state.clone(), node.handle());
-        let witness = details.primitive_witness();
         std::thread::spawn(move || {
             let outcome = submit_witness(witness, network, job_node.as_ref());
             *job_state.lock().unwrap() = match outcome {
@@ -230,9 +250,14 @@ impl Wallets {
                 Err(e) => JobState::Failed(format!("{e:#}")),
             };
         });
-        let reply = json!({ "sent": amount.trim(), "fee": fee.trim(), "inputs": built.inputs, "change": built.change, "proofs": proofs });
-        jobs.insert(id.clone(), Job { network_id: network_id.to_string(), state, pending: wallet.pending_for(&plan, now_ms), reply });
-        Ok(json!({ "job": id, "state": "proving", "proofs": proofs }))
+        jobs.insert(id.clone(), Job { network_id: network_id.to_string(), state, pending, reply });
+        id
+    }
+
+    /// Whether a transaction of this network is still being proven: one at a time, so two
+    /// never spend the same coins.
+    fn proving(jobs: &std::collections::HashMap<String, Job>, network_id: &str) -> bool {
+        jobs.values().any(|j| j.network_id == network_id && matches!(*j.state.lock().unwrap(), JobState::Proving))
     }
 
     /// Where a payment job stands: "proving", "sent" (with what was sent) or
@@ -247,9 +272,11 @@ impl Wallets {
             JobState::Failed(message) => json!({ "state": "failed", "message": message }),
             JobState::Sent { recorded } => {
                 if !*recorded {
-                    let mut wallet = self.load(network_id, network)?.context("no wallet")?;
-                    wallet.add_pending(found.pending.clone());
-                    self.save_state(network_id, &wallet)?;
+                    if let Some(pending) = &found.pending {
+                        let mut wallet = self.load(network_id, network)?.context("no wallet")?;
+                        wallet.add_pending(pending.clone());
+                        self.save_state(network_id, &wallet)?;
+                    }
                     *recorded = true;
                 }
                 let mut reply = found.reply.clone();
@@ -534,17 +561,37 @@ mod tests {
         wallets.create("neptune-main", Network::Main, &node).unwrap();
         let lock = wallets.htlc_claim_lock("neptune-main", Network::Main).unwrap();
         let claim_lock = lock["claim_lock"].as_str().unwrap();
-        let past = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", claim_lock, 1_000, None, 2_000, &node);
+        let past = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", claim_lock, 1_000, None, 2_000, &node, Proving::Wait);
         assert!(past.unwrap_err().to_string().contains("future"));
-        let bad = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", "not a digest", 3_000, None, 2_000, &node);
+        let bad = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", "not a digest", 3_000, None, 2_000, &node, Proving::Wait);
         assert!(bad.unwrap_err().to_string().contains("claim lock"));
         assert!(wallets.htlc_secret("neptune-main", "nope").is_err());
         let prepared = wallets.htlc_prepare("neptune-main", Network::Main).unwrap();
         assert_eq!(prepared["hash_lock"].as_str().unwrap().len(), 64);
         assert!(prepared["hash_lock"].as_str().unwrap().starts_with(prepared["swap_id"].as_str().unwrap()));
-        let unknown = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", claim_lock, 3_000, Some("nope"), 2_000, &node);
+        let unknown = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", claim_lock, 3_000, Some("nope"), 2_000, &node, Proving::Background);
         assert!(unknown.unwrap_err().to_string().contains("no such prepared swap"));
         assert!(wallets.htlc_status("neptune-main", None, None, 0, &node).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn swap_records_are_kept_bounded_and_private() {
+        let root = temp_root();
+        let wallets = Wallets::new(Some(root.clone()));
+        let id = "00112233445566778899aabbccddeeff";
+        wallets.swap_save("neptune-main", id, serde_json::json!({"step": "quoted"})).unwrap();
+        wallets.swap_save("neptune-main", id, serde_json::json!({"step": "locked"})).unwrap();
+        let list = wallets.swap_list("neptune-main").unwrap();
+        assert_eq!(list["swaps"][id]["step"], "locked");
+        assert_eq!(list["swaps"].as_object().unwrap().len(), 1);
+        let mode = fs::metadata(root.join("neptune-main/journal.json")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert!(wallets.swap_save("neptune-main", "../../etc", serde_json::json!({})).is_err(), "ids are hex");
+        assert!(wallets.swap_save("neptune-main", "ABCDEF0123456789", serde_json::json!({})).is_err(), "lowercase only");
+        assert!(wallets.swap_save("neptune-main", id, serde_json::json!("text")).is_err(), "an object");
+        let big = serde_json::json!({ "x": "a".repeat(40 * 1024) });
+        assert!(wallets.swap_save("neptune-main", id, big).is_err(), "bounded");
         fs::remove_dir_all(root).unwrap();
     }
 

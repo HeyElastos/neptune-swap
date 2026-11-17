@@ -11,6 +11,10 @@ use crate::{Amount, Asset, Error, Intent, Message, PROTOCOL_VERSION};
 /// The public topic offers travel on, per network.
 pub const OFFERS_TOPIC_MAIN: &str = "neptune-swap/offers/main";
 pub const OFFERS_TOPIC_TEST: &str = "neptune-swap/offers/test";
+/// Where sealed swap messages travel (intent, quote, accept, lock notices): everyone on a
+/// network shares one topic, and only the recipient a message is sealed to can open it.
+pub const DEALS_TOPIC_MAIN: &str = "neptune-swap/deals/main";
+pub const DEALS_TOPIC_TEST: &str = "neptune-swap/deals/test";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

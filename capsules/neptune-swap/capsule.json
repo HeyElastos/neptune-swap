@@ -50,6 +50,60 @@
           "operation": "wallet"
         },
         {
+          "id": "swap.lock",
+          "description": "Lock NPT in a swap's hashed timelock, proven in the provider",
+          "risk": "payment",
+          "approval": "runtime_policy",
+          "audit": "full",
+          "resource": "elastos://neptune/*",
+          "operation": "htlc_lock"
+        },
+        {
+          "id": "swap.claim",
+          "description": "Claim a counterparty's NPT lock with the revealed secret",
+          "risk": "payment",
+          "approval": "runtime_policy",
+          "audit": "full",
+          "resource": "elastos://neptune/*",
+          "operation": "htlc_claim"
+        },
+        {
+          "id": "swap.refund",
+          "description": "Take back this wallet's NPT lock after its timeout",
+          "risk": "payment",
+          "approval": "runtime_policy",
+          "audit": "full",
+          "resource": "elastos://neptune/*",
+          "operation": "htlc_refund"
+        },
+        {
+          "id": "swap.check",
+          "description": "Check a counterparty's NPT lock against the agreed terms on this Home's own node",
+          "risk": "read",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/*",
+          "operation": "htlc_check"
+        },
+        {
+          "id": "swap.secret",
+          "description": "The secret of a swap this wallet locks NPT for, to claim the other leg through Wallet",
+          "risk": "rights",
+          "approval": "runtime_policy",
+          "audit": "full",
+          "resource": "elastos://neptune/htlc/secret",
+          "operation": "htlc_secret"
+        },
+        {
+          "id": "swap.journal",
+          "description": "Keep and read this app's record of its open swaps (in the provider's data)",
+          "risk": "write",
+          "approval": "runtime_policy",
+          "audit": "summary",
+          "resource": "elastos://neptune/*",
+          "operation": "swap_save"
+        },
+        {
           "id": "prices.view",
           "description": "Show USD reference prices; the Runtime asks the user first (the sources see this computer's address)",
           "risk": "read",
@@ -69,7 +123,7 @@
         },
         {
           "id": "offers.carrier",
-          "description": "Join, send on and read its own carrier topics only: neptune-swap/offers/main, neptune-swap/offers/test",
+          "description": "Join, send on and read its own carrier topics only: neptune-swap/offers/{main,test} (public offers) and neptune-swap/deals/{main,test} (sealed swap messages)",
           "risk": "write",
           "approval": "runtime_policy",
           "audit": "summary",

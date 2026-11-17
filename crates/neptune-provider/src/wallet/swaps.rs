@@ -18,6 +18,15 @@ use serde_json::{json, Value};
 
 use super::{blocks, catch_up, prove_and_submit, submit_witness, Node, Wallets, BATCH};
 
+/// How a lock, claim or refund is proven: here and now (a stdio caller that waits), or on a
+/// background thread the caller follows with `job_status` (the Runtime, which does not wait
+/// minutes for one reply).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Proving {
+    Wait,
+    Background,
+}
+
 /// A lock this wallet gave.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Lock {
@@ -111,6 +120,7 @@ impl Wallets {
         prepared: Option<&str>,
         now_ms: u64,
         node: &dyn Node,
+        proving: Proving,
     ) -> Result<Value> {
         ensure!(refund_after_ms > now_ms, "the refund time must be in the future");
         let claim_lock = light_core::neptune_wallet::twenty_first::prelude::Digest::try_from_hex(claim_lock.trim())
@@ -153,9 +163,23 @@ impl Wallets {
         let id = hex(&hash_lock)[..16].to_string();
         book.locks.push(Lock { id: id.clone(), secret: hex(&secret), note: note.clone(), refund_index, sent_at_height: tip, located: None });
         self.save_book(network_id, &book)?;
-        prove_and_submit(&details, node)?;
-        self.save_state(network_id, &wallet)?;
-        Ok(json!({ "swap_id": id, "hash_lock": hex(&hash_lock), "note": note }))
+        let reply = json!({ "swap_id": id, "hash_lock": hex(&hash_lock), "note": note, "from_height": tip });
+        match proving {
+            Proving::Wait => {
+                prove_and_submit(&details, node)?;
+                self.save_state(network_id, &wallet)?;
+                Ok(reply)
+            }
+            Proving::Background => {
+                let mut jobs = self.jobs.lock().map_err(|_| anyhow::anyhow!("jobs lock"))?;
+                ensure!(!Self::proving(&jobs, network_id), "a transaction is still being proven; wait for it first");
+                self.save_state(network_id, &wallet)?;
+                let job = Self::spawn_job(&mut jobs, network_id, details.primitive_witness(), network, node, None, reply.clone(), now_ms);
+                let mut reply = reply;
+                reply["job"] = json!(job);
+                Ok(reply)
+            }
+        }
     }
 
     /// The secret of a lock this wallet gave.
@@ -210,33 +234,95 @@ impl Wallets {
         from_height: u64,
         now_ms: u64,
         node: &dyn Node,
+        proving: Proving,
     ) -> Result<Value> {
         let preimage: [u8; 32] = hex_bytes(preimage)?.try_into().map_err(|_| anyhow::anyhow!("the secret is 32 bytes"))?;
         let wallet = self.load(network_id, network)?.context("no wallet")?;
         note.check()?;
         let tip = rpc::parse_height(&node.call(rpc::height_request())?)?;
         let at = find(&note, from_height, tip, node)?.context("the lock is not on chain (yet)")?;
-        self.spend(&wallet, &note, at, HtlcSpend::Claim { preimage, claim_index }, fee, now_ms, node)?;
-        Ok(json!({ "claimed": note.amount, "fee": fee.trim(), "lock_height": at.height }))
+        let reply = json!({ "claimed": note.amount, "fee": fee.trim(), "lock_height": at.height });
+        self.spend(network_id, &wallet, &note, at, HtlcSpend::Claim { preimage, claim_index }, fee, now_ms, node, proving, reply)
     }
 
     /// Takes a lock this wallet gave back, from its refund time on.
-    pub fn htlc_refund(&self, network_id: &str, network: Network, swap_id: &str, fee: &str, now_ms: u64, node: &dyn Node) -> Result<Value> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn htlc_refund(&self, network_id: &str, network: Network, swap_id: &str, fee: &str, now_ms: u64, node: &dyn Node, proving: Proving) -> Result<Value> {
         let wallet = self.load(network_id, network)?.context("no wallet")?;
         let at = self.locate_own(network_id, swap_id, node)?.context("the lock is not on chain (yet)")?;
         let book = self.book(network_id)?;
         let lock = book.locks.iter().find(|l| l.id == swap_id).context("no such swap")?;
-        self.spend(&wallet, &lock.note, at, HtlcSpend::Refund { refund_index: lock.refund_index }, fee, now_ms, node)?;
-        Ok(json!({ "refunded": lock.note.amount, "fee": fee.trim(), "lock_height": at.height }))
+        let reply = json!({ "refunded": lock.note.amount, "fee": fee.trim(), "lock_height": at.height });
+        self.spend(network_id, &wallet, &lock.note, at, HtlcSpend::Refund { refund_index: lock.refund_index }, fee, now_ms, node, proving, reply)
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn spend(&self, wallet: &LightWallet, note: &HtlcNote, at: Located, spend: HtlcSpend, fee: &str, now_ms: u64, node: &dyn Node) -> Result<()> {
+    fn spend(
+        &self,
+        network_id: &str,
+        wallet: &LightWallet,
+        note: &HtlcNote,
+        at: Located,
+        spend: HtlcSpend,
+        fee: &str,
+        now_ms: u64,
+        node: &dyn Node,
+        proving: Proving,
+        reply: Value,
+    ) -> Result<Value> {
         let snapshot = rpc::parse_membership_snapshot(
             &node.call(rpc::restore_membership_proof_request(vec![LightWallet::htlc_index_set(note, at)]))?,
         )?;
         let witness = wallet.build_htlc_spend(note, at, spend, fee, snapshot, now_ms)?;
-        submit_witness(witness, wallet.network(), node)
+        match proving {
+            Proving::Wait => {
+                submit_witness(witness, wallet.network(), node)?;
+                Ok(reply)
+            }
+            Proving::Background => {
+                let mut jobs = self.jobs.lock().map_err(|_| anyhow::anyhow!("jobs lock"))?;
+                ensure!(!Self::proving(&jobs, network_id), "a transaction is still being proven; wait for it first");
+                let job = Self::spawn_job(&mut jobs, network_id, witness, wallet.network(), node, None, reply.clone(), now_ms);
+                let mut reply = reply;
+                reply["job"] = json!(job);
+                Ok(reply)
+            }
+        }
+    }
+
+    /// The NPT receiver's check of a counterparty's lock before it locks anything itself:
+    /// the note is exactly the agreed lock (hash lock, this wallet's claim key at
+    /// `claim_index`, `amount_nau`, no other coin, no time lock), it refunds no earlier than
+    /// `least_refund_after_ms`, and it is on this provider's own node at `min_depth` or more.
+    #[allow(clippy::too_many_arguments)]
+    pub fn htlc_check(
+        &self,
+        network_id: &str,
+        network: Network,
+        note: HtlcNote,
+        from_height: u64,
+        hash_lock: &str,
+        claim_index: u64,
+        amount_nau: &str,
+        least_refund_after_ms: u64,
+        min_depth: u64,
+        node: &dyn Node,
+    ) -> Result<Value> {
+        let wallet = self.load(network_id, network)?.context("no wallet")?;
+        note.check()?;
+        ensure!(note.hash_lock.eq_ignore_ascii_case(hash_lock.trim()), "the lock is under another secret");
+        ensure!(note.claim_lock.eq_ignore_ascii_case(&wallet.swap_lock(claim_index).to_hex()), "the lock is not claimable by this wallet");
+        let amount: i128 = amount_nau.trim().parse().context("the amount is not a whole number of nau")?;
+        ensure!(note.utxo.get_native_currency_amount().to_nau() == amount, "the lock holds another amount than agreed");
+        ensure!(note.refund_after_ms >= least_refund_after_ms, "the lock refunds too early");
+        let tip = rpc::parse_height(&node.call(rpc::height_request())?)?;
+        Ok(match find(&note, from_height, tip, node)? {
+            Some(at) => {
+                let depth = tip.saturating_sub(at.height) + 1;
+                json!({ "found": true, "depth": depth, "deep_enough": depth >= min_depth, "height": at.height, "refund_after_ms": note.refund_after_ms, "tip": tip })
+            }
+            None => json!({ "found": false, "deep_enough": false, "refund_after_ms": note.refund_after_ms, "tip": tip }),
+        })
     }
 }
 

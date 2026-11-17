@@ -95,6 +95,35 @@ enum Request {
         refund_after_ms: u64,
         #[serde(default)]
         swap_id: Option<String>,
+        /// Prove on a background thread and answer with a `job` at once.
+        #[serde(default)]
+        background: bool,
+    },
+    /// The NPT receiver's check of a counterparty's lock note.
+    HtlcCheck {
+        network: String,
+        note: HtlcNote,
+        from_height: u64,
+        hash_lock: String,
+        claim_index: u64,
+        amount_nau: String,
+        least_refund_after_ms: u64,
+        min_depth: u64,
+    },
+    /// Where a background proof (payment, swap lock, claim, refund) stands.
+    JobStatus {
+        network: String,
+        job: String,
+    },
+    /// Keeps the app's record of one swap, so a closed page can pick it up again.
+    SwapSave {
+        network: String,
+        id: String,
+        record: Value,
+    },
+    /// Every kept swap record of this network.
+    SwapList {
+        network: String,
     },
     HtlcStatus {
         network: String,
@@ -117,11 +146,15 @@ enum Request {
         fee: String,
         #[serde(default)]
         from_height: u64,
+        #[serde(default)]
+        background: bool,
     },
     HtlcRefund {
         network: String,
         swap_id: String,
         fee: String,
+        #[serde(default)]
+        background: bool,
     },
     /// Reference prices in USD (display only), when the configuration allows
     /// asking public sources.
@@ -281,18 +314,26 @@ impl Provider {
             }),
             Request::HtlcClaimLock { network } => self.wallet(&network, |w, n| w.wallets.htlc_claim_lock(&n.id, n.chain)),
             Request::HtlcPrepare { network } => self.wallet(&network, |w, n| w.wallets.htlc_prepare(&n.id, n.chain)),
-            Request::HtlcLock { network, amount, fee, claim_lock, refund_after_ms, swap_id } => self.wallet(&network, |w, n| {
-                w.wallets.htlc_lock(&n.id, n.chain, &amount, &fee, &claim_lock, refund_after_ms, swap_id.as_deref(), now_ms(), &HttpNode(n.rpc.clone()))
+            Request::HtlcLock { network, amount, fee, claim_lock, refund_after_ms, swap_id, background } => self.wallet(&network, |w, n| {
+                w.wallets.htlc_lock(&n.id, n.chain, &amount, &fee, &claim_lock, refund_after_ms, swap_id.as_deref(), now_ms(), &HttpNode(n.rpc.clone()), proving(background))
             }),
+            Request::HtlcCheck { network, note, from_height, hash_lock, claim_index, amount_nau, least_refund_after_ms, min_depth } => {
+                self.wallet(&network, |w, n| {
+                    w.wallets.htlc_check(&n.id, n.chain, note, from_height, &hash_lock, claim_index, &amount_nau, least_refund_after_ms, min_depth, &HttpNode(n.rpc.clone()))
+                })
+            }
+            Request::JobStatus { network, job } => self.wallet(&network, |w, n| w.wallets.send_status(&n.id, n.chain, &job)),
+            Request::SwapSave { network, id, record } => self.wallet(&network, |w, n| w.wallets.swap_save(&n.id, &id, record.clone())),
+            Request::SwapList { network } => self.wallet(&network, |w, n| w.wallets.swap_list(&n.id)),
             Request::HtlcStatus { network, swap_id, note, from_height } => self.wallet(&network, |w, n| {
                 w.wallets.htlc_status(&n.id, swap_id.as_deref(), note, from_height, &HttpNode(n.rpc.clone()))
             }),
             Request::HtlcSecret { network, swap_id } => self.wallet(&network, |w, n| w.wallets.htlc_secret(&n.id, &swap_id)),
-            Request::HtlcClaim { network, note, preimage, claim_index, fee, from_height } => self.wallet(&network, |w, n| {
-                w.wallets.htlc_claim(&n.id, n.chain, note, &preimage, claim_index, &fee, from_height, now_ms(), &HttpNode(n.rpc.clone()))
+            Request::HtlcClaim { network, note, preimage, claim_index, fee, from_height, background } => self.wallet(&network, |w, n| {
+                w.wallets.htlc_claim(&n.id, n.chain, note, &preimage, claim_index, &fee, from_height, now_ms(), &HttpNode(n.rpc.clone()), proving(background))
             }),
-            Request::HtlcRefund { network, swap_id, fee } => self.wallet(&network, |w, n| {
-                w.wallets.htlc_refund(&n.id, n.chain, &swap_id, &fee, now_ms(), &HttpNode(n.rpc.clone()))
+            Request::HtlcRefund { network, swap_id, fee, background } => self.wallet(&network, |w, n| {
+                w.wallets.htlc_refund(&n.id, n.chain, &swap_id, &fee, now_ms(), &HttpNode(n.rpc.clone()), proving(background))
             }),
             Request::SolverIdentity { network } => self.wallet(&network, |w, n| w.wallets.solver_identity(&n.id, n.chain)),
             Request::OfferSign { network, offer } => {
@@ -430,3 +471,7 @@ fn error(code: &str, message: &str) -> Value {
 
 #[cfg(test)]
 mod tests;
+
+fn proving(background: bool) -> wallet::Proving {
+    if background { wallet::Proving::Background } else { wallet::Proving::Wait }
+}

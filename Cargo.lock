@@ -3112,6 +3112,7 @@ dependencies = [
  "intents-protocol",
  "js-sys",
  "qrcode",
+ "serde",
  "serde_json",
  "slint",
  "slint-build",
