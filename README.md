@@ -12,6 +12,39 @@ leg keeps amounts, senders and receivers private.
 > end only on local chains (Neptune regtest and a local EVM chain). Do not trust this with
 > funds you cannot afford to lose.
 
+## Why elastOS
+
+Most apps today are a page on someone's server, holding your keys or your data, reachable at a
+domain that can be seized, censored or spoofed. elastOS turns that around: the app runs on
+**your** computer, inside a runtime that decides what it may touch, and it talks to the world
+through identities, not domains. Neptune Swap leans on that at every step:
+
+- **Capsules, sandboxed.** The app is a capsule: a web page compiled from Rust to wasm that can
+  reach only its own Home. No raw network, no file system, no keys. What it may do is declared
+  in its manifest and enforced by the runtime.
+- **Providers hold the power, behind typed doors.** Keys, proving and node access live in a
+  native provider (`elastos://neptune/*`) that answers a short list of typed operations. The
+  capsule asks "pay X to Y"; it never sees a seed.
+- **The user approves, in Home.** Anything with consequences goes through a capability
+  approval in Home or a passkey prompt in Wallet: showing USD prices, sharing an account,
+  every payment. A page cannot approve for itself.
+- **Identities instead of domains.** Parties are `did:key` identities. Messages travel over the
+  elastOS carrier, peer to peer, signed and sealed to their recipient. No server in the middle
+  to trust, block or impersonate.
+- **One wallet for every chain.** The other leg of a swap (ETH, USDC; Bitcoin when Wallet can
+  send it) goes through elastOS Wallet and whatever approval method the user chose there:
+  its own passkey, MetaMask, UniSat.
+- **Signed software.** A Home runs a signed release whose components are pinned by hash.
+
+Each capsule does one thing well and leans on the runtime for the rest: identity, transport,
+approvals, wallets, storage. Put enough of them together, run by people on their own machines
+and talking to each other directly, and you get a world computer that nobody owns and anybody
+can extend.
+
+**Build capsules with us.** A swap needs solvers, price feeds, chain watchers, reputation;
+a world computer needs far more. If you can write Rust, Slint or a provider, pick something,
+open an issue or a pull request, and let us build it together.
+
 ## What works
 
 - **Neptune light wallet** (seed, Generation and EC hybrid addresses, address list, QR codes,
