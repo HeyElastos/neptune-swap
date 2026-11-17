@@ -168,7 +168,11 @@ async fn resume(weak: Weak<AppWindow>, state: Shared) {
     for (_, record) in records {
         match serde_json::from_value::<Swap>(record) {
             Ok(swap) if swap.open_ended() => open.push(swap),
-            Ok(_) => {}
+            Ok(swap) => {
+                if completed(&swap) {
+                    offers_ui::trust(&swap.solver);
+                }
+            }
             Err(_) => unreadable += 1,
         }
     }
@@ -299,6 +303,9 @@ async fn run(weak: Weak<AppWindow>, state: Shared, network: String, token: Strin
             }
             if let Some(again) = swap.resend_due(now, RESEND_SECS) {
                 let _ = deliver(&token, swap.main_net, &again).await;
+            }
+            if before.open_ended() && completed(&swap) {
+                offers_ui::trust(&swap.solver);
             }
             if swap != before {
                 if let Err(e) = save(&token, &network, &swap).await {
@@ -615,6 +622,11 @@ async fn step(
         Step::Done | Step::Failed => {}
     }
     Ok(())
+}
+
+/// A swap that finished with both sides paid.
+fn completed(swap: &Swap) -> bool {
+    swap.step == Step::Done && swap.line.starts_with("Swap complete")
 }
 
 /// The steps the card lists for this direction, and where the swap is among them.

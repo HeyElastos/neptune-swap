@@ -26,11 +26,23 @@ pub struct Board {
     /// Withdrawn offers, until no earlier copy can still be live: a replayed
     /// or late copy does not bring one back.
     withdrawn: HashMap<(String, String), u64>,
+    /// Solvers this Home has finished swaps with: their offers are listed first and never
+    /// pushed out by others, so a flood of new identities cannot hide them.
+    trusted: std::collections::HashSet<String>,
 }
 
 impl Board {
     /// Takes one message from the topic: base64url of a signed offer. Anything
     /// that does not verify for `net` at `now` is dropped unread.
+    /// Marks `solver` as one this Home has finished a swap with.
+    pub fn trust(&mut self, solver: &str) {
+        self.trusted.insert(solver.to_string());
+    }
+
+    pub fn is_trusted(&self, solver: &str) -> bool {
+        self.trusted.contains(solver)
+    }
+
     pub fn ingest(&mut self, message: &str, now: u64, net: Net) -> Result<(), String> {
         if message.len() > MAX_MESSAGE_BYTES * 4 / 3 + 4 {
             return Err("too large".into());
@@ -66,9 +78,14 @@ impl Board {
                 self.prune(now);
             }
             if self.offers.len() >= TOTAL {
-                // Make room: the offer that ends soonest goes.
-                if let Some(k) = self.offers.iter().min_by_key(|(_, l)| l.offer.expires_at).map(|(k, _)| k.clone()) {
-                    self.offers.remove(&k);
+                // Make room: the untrusted offer that ends soonest goes. A trusted solver's
+                // offer is never pushed out; when only those are left, a new untrusted one waits.
+                let evict = self.offers.iter().filter(|(k, _)| !self.trusted.contains(&k.0)).min_by_key(|(_, l)| l.offer.expires_at).map(|(k, _)| k.clone());
+                match evict {
+                    Some(k) => {
+                        self.offers.remove(&k);
+                    }
+                    None => return Err("the board is full of trusted solvers' offers".into()),
                 }
             }
         }
@@ -89,8 +106,11 @@ impl Board {
             .values()
             .filter(|l| l.offer.expires_at > now && l.offer.want == *give && l.offer.give == *want)
             .collect();
-        // More of `want` per unit of `give` first.
-        rows.sort_by(|a, b| user_rate(&b.offer).partial_cmp(&user_rate(&a.offer)).unwrap_or(std::cmp::Ordering::Equal));
+        // Solvers this Home has finished swaps with first, then more of `want` per unit of `give`.
+        rows.sort_by(|a, b| {
+            let trust = self.trusted.contains(&b.solver).cmp(&self.trusted.contains(&a.solver));
+            trust.then(user_rate(&b.offer).partial_cmp(&user_rate(&a.offer)).unwrap_or(std::cmp::Ordering::Equal))
+        });
         rows
     }
 
@@ -377,5 +397,25 @@ mod tests {
         assert!(board.matching(&usdc(), &npt(), NOW).iter().any(|l| l.offer.id == "9".repeat(32)));
         let other_chain = Asset { chain: intents_protocol::Chain::Bitcoin, symbol: "USDC".into() };
         assert!(board.matching(&other_chain, &npt(), NOW).is_empty());
+    }
+
+    #[test]
+    fn a_flood_of_new_identities_never_pushes_out_a_trusted_solver() {
+        let mut board = Board::default();
+        let trusted = offer_from(&form(true), "7".repeat(32), NOW).unwrap();
+        board.ingest(&published(&trusted, 7), NOW, Net::Main).unwrap();
+        let solver = board.matching(&usdc(), &npt(), NOW)[0].solver.clone();
+        board.trust(&solver);
+        // 300 spam offers from 60 identities, all ending later than the trusted one.
+        for seed in 0..60u32 {
+            for i in 0..PER_SOLVER as u32 {
+                let o = Offer { id: format!("{:032x}", 1000 + seed * 10 + i), expires_at: NOW + 3000, rate_want: Amount::new(1), ..trusted.clone() };
+                let _ = board.ingest(&published(&o, 100 + seed as u8), NOW, Net::Main);
+            }
+        }
+        assert_eq!(board.len(), TOTAL);
+        let rows = board.matching(&usdc(), &npt(), NOW);
+        assert_eq!(rows[0].solver, solver, "listed first, even against better rates");
+        assert!(board.is_trusted(&solver));
     }
 }

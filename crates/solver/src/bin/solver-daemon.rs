@@ -69,6 +69,12 @@ struct OfferTerms {
 
 /// Offers last this long and are republished at half of it.
 const OFFER_SECS: u64 = 20 * 60;
+/// Limits against spam: quotes a minute, deals open at once, and NPT tied up at once in
+/// locks this solver made for takers who have not finished (a taker who accepts and walks
+/// away ties up the solver's NPT until the timeout; this caps what that can cost).
+const QUOTES_PER_MINUTE: usize = 20;
+const OPEN_DEALS_MAX: usize = 20;
+const NPT_EXPOSURE_MAX: u128 = 50 * 4 * 10u128.pow(30);
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
@@ -151,6 +157,11 @@ fn main() -> Result<()> {
     }
 }
 
+thread_local! {
+    /// When the last quotes went out (Unix seconds).
+    static QUOTED: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn hex16() -> String {
     rand::random::<[u8; 16]>().iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -198,7 +209,19 @@ fn handle(
         if deals.contains_key(&intent.digest) || deals.values().any(|d| d.user == intent.signer.to_string()) {
             return Ok(());
         }
+        anyhow::ensure!(deals.len() < OPEN_DEALS_MAX, "too many open deals; not quoting");
+        QUOTED.with(|q| {
+            let mut q = q.borrow_mut();
+            q.retain(|at| now.saturating_sub(*at) < 60);
+            anyhow::ensure!(q.len() < QUOTES_PER_MINUTE, "too many quotes this minute");
+            q.push(now);
+            Ok(())
+        })?;
         let deliver = offers.iter().zip(ids).find_map(|(t, id)| matches(&offer_of(t, id), &intent.body)).context("the intent takes none of our offers")?;
+        // Checked before quoting: a quote already takes a swap key and a secret.
+        let adds = if intent.body.want.is_npt() { deliver.units() } else { 0 };
+        let exposed: u128 = deals.values().map(Deal::npt_exposure).sum::<u128>() + adds;
+        anyhow::ensure!(exposed <= NPT_EXPOSURE_MAX, "NPT tied up in open deals is at its cap; not quoting");
         let (deal, quote) = Deal::quote(intent, deliver, key, net, chains)?;
         send_to(carrier, topic, &deal.user, &quote);
         println!("quoted {}…", &deal.intent_digest()[..12]);

@@ -168,6 +168,13 @@ impl Deal {
         Ok((deal, bytes))
     }
 
+    /// NPT this deal has locked, or will lock on accept, from the solver's wallet (smallest
+    /// units): counted against the solver's cap on NPT tied up at once.
+    pub fn npt_exposure(&self) -> u128 {
+        let open = !matches!(self.stage, Stage::Done | Stage::Failed);
+        if open && self.solver_gives_npt() { self.quote.body.want_amount.units() } else { 0 }
+    }
+
     pub fn intent_digest(&self) -> &str {
         &self.intent.digest
     }

@@ -221,6 +221,15 @@ pub(crate) async fn join(topic: &str, token: &str) -> Result<(), String> {
     }
 }
 
+/// Marks a solver this Home finished a swap with: its offers come first and stay listed.
+pub fn trust(solver: &str) {
+    STATE.with(|s| {
+        if let Some(state) = s.borrow().as_ref() {
+            state.borrow_mut().board.trust(solver);
+        }
+    });
+}
+
 /// The solver of the offer the form was filled from, while the form still shows exactly
 /// that offer's pair and amounts: the swap goes to that solver.
 pub fn taken_offer(app: &AppWindow) -> Option<String> {
