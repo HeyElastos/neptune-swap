@@ -8,9 +8,10 @@ solvers, which answer with signed quotes. The two legs settle with hashed timelo
 own HTLC lock script on one side, an HTLC contract on the other chain on the other. The Neptune
 leg keeps amounts, senders and receivers private.
 
-> **Status: development.** Nothing here has had an outside security audit. Swaps have run end to
-> end only on local chains (Neptune regtest and a local EVM chain). Do not trust this with
-> funds you cannot afford to lose.
+> **Experimental concept, not a finished product.** This is a working concept to show what an
+> elastOS capsule can do, not software to rely on. It has not been tested in real use or
+> audited: swaps have run end to end only on local test chains (Neptune regtest and a local
+> EVM chain), and parts of the design are still open. Do not use it with real funds.
 
 ## Why elastOS
 
