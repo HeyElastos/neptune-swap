@@ -204,6 +204,56 @@ index 471b56d0..ade3ca50 100644
          })
          .ok_or_else(|| {
              (
+diff --git a/elastos/crates/elastos-server/src/api/gateway_browser_wallet_reads.rs b/elastos/crates/elastos-server/src/api/gateway_browser_wallet_reads.rs
+index 54f148d8..7865f4cf 100644
+--- a/elastos/crates/elastos-server/src/api/gateway_browser_wallet_reads.rs
++++ b/elastos/crates/elastos-server/src/api/gateway_browser_wallet_reads.rs
+@@ -2,6 +2,9 @@
+ 
+ use super::*;
+ 
++/// The chain reads an app other than the Browser may make (local Neptune development fork).
++const APP_CHAIN_READS: &[&str] = &["eth_blockNumber", "eth_call", "eth_getCode", "eth_getLogs", "eth_getTransactionReceipt"];
++
+ #[cfg(not(test))]
+ const BROWSER_WALLET_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+ #[cfg(test)]
+@@ -13,6 +16,35 @@ pub(super) async fn browser_wallet_read(
+     authority: &RuntimeWalletAuthority,
+     input: BrowserWalletReadRequest,
+ ) -> Result<serde_json::Value, (StatusCode, String)> {
++    // Local Neptune development fork: an app other than the Browser shows no web pages, so
++    // the Browser's internet consent does not apply to it. It gets the few typed reads a
++    // swap needs (its HTLC's code and state, receipts, logs, the height), through the
++    // chain provider as for the Browser, audited the same way.
++    if authority.verified_context().actor() != BROWSER_CAPSULE_ID {
++        if !APP_CHAIN_READS.contains(&input.method.trim()) {
++            return Err((StatusCode::BAD_REQUEST, format!("{} is not a chain read this app may make", input.method.trim())));
++        }
++        let request_id = browser_effect_request_id("chain-read", input.method.trim());
++        let audit = |event_type, result, decision| BrowserEffectAuditInput {
++            event_type,
++            principal_id: &context.principal_id,
++            session_id: &context.session_id,
++            request_id: &request_id,
++            result,
++            method: input.method.trim(),
++            resource: &input.chain_namespace,
++            page_url: &input.page_url,
++            origin: input.origin.as_deref(),
++            decision,
++        };
++        append_browser_effect_audit_or_500(&state.data_dir, audit("browser.chain_read.requested", "requested", "app_typed_read_policy"))?;
++        let result = tokio::time::timeout(BROWSER_WALLET_READ_TIMEOUT, browser_wallet_read_inner(state, authority, &input))
++            .await
++            .unwrap_or_else(|_| Err((StatusCode::GATEWAY_TIMEOUT, "Browser wallet read timed out".to_string())));
++        let (label, decision) = if result.is_ok() { ("allowed", "provider_mediated_typed_read") } else { ("denied", "fail_closed") };
++        append_browser_effect_audit_or_500(&state.data_dir, audit("browser.chain_read.completed", label, decision))?;
++        return result;
++    }
+     let internet = gateway_browser_internet::effect_for_authority(state, authority, false)
+         .await
+         .map_err(|_| {
 diff --git a/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs b/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs
 index c6742ea3..cba0b498 100644
 --- a/elastos/crates/elastos-server/src/api/gateway_provider_proxy.rs

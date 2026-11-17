@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
 /// @title The EVM half of a Neptune atomic swap: a hashed timelock for ETH or an ERC-20 token.

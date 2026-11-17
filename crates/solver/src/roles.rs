@@ -1,4 +1,4 @@
-//! The two sides of an NPT → ETH swap. The user gives NPT, so the user holds
+//! The two sides of an NPT → ETH swap (ETH on Base; a local chain in tests). The user gives NPT, so the user holds
 //! the secret (the protocol's rule: the NPT giver holds it): it locks NPT
 //! first, with the longer timeout, then claims the solver's ETH (which makes
 //! the secret public on the EVM chain), and the solver claims the NPT last.
@@ -73,7 +73,7 @@ impl User {
             id: hex(&id)[2..].to_string(),
             give: Asset::npt(),
             give_amount: Amount::new(npt_units),
-            want: Asset { chain: Chain::Ethereum, symbol: "ETH".into() },
+            want: Asset { chain: Chain::Base, symbol: "ETH".into() },
             min_want_amount: Amount::new(min_wei),
             expires_at: now_secs() + 600,
         };
@@ -139,6 +139,8 @@ impl User {
         locked.body.answers(&locked.signer, accept, quote)?;
         let contract = parse_address(&locked.body.contract).context("contract")?;
         ensure!(contract == evm.contract, "the ETH lock is in another contract");
+        let code = evm.node.call("eth_getCode", json!([hex(&contract), "latest"]))?;
+        ensure!(evm_htlc::is_htlc_code(&parse_hex(code.as_str().context("eth_getCode")?).context("hex")?), "not the NeptuneHtlc contract");
         let id = parse_word(&locked.body.id).context("id")?;
         let lock = evm.lock_view(&id)?;
         let solver = parse_address(&quote.body.refund_key).context("solver key")?;
@@ -151,9 +153,9 @@ impl User {
         // The ETH refund must come well before the NPT refund, and there must be
         // time to claim before it.
         let neptune_refund = self.neptune_refund_ms / 1000;
-        ensure!(lock.refund_after + Chain::Ethereum.gap_secs() <= neptune_refund, "the ETH lock refunds too late");
+        ensure!(lock.refund_after + Chain::Base.gap_secs() <= neptune_refund, "the ETH lock refunds too late");
         let evm_now = evm.node.now()?;
-        ensure!(may_reveal(Chain::Ethereum, lock.refund_after, evm_now), "too late to reveal the secret safely");
+        ensure!(may_reveal(Chain::Base, lock.refund_after, evm_now), "too late to reveal the secret safely");
         let secret = self.neptune.call("htlc_secret", json!({ "swap_id": self.swap_id }))?;
         let secret = parse_word(secret["secret"].as_str().context("secret")?).context("secret")?;
         let receipt = evm.node.send(&self.eth, &evm.contract, 0, evm_htlc::claim(&id, &secret))?;
@@ -187,18 +189,18 @@ impl Solver {
     pub fn quote(&mut self, intent_bytes: &[u8]) -> Result<Vec<u8>> {
         let intent: Decoded<Intent> = decode(intent_bytes, now_secs(), NET)?;
         let i = &intent.body;
-        ensure!(i.give.is_npt() && i.want == Asset { chain: Chain::Ethereum, symbol: "ETH".into() }, "this solver buys NPT for ETH only");
+        ensure!(i.give.is_npt() && i.want == Asset { chain: Chain::Base, symbol: "ETH".into() }, "this solver buys NPT for ETH only");
         let want = mul_div(i.give_amount.units(), self.wei_per_npt, NAU_PER_NPT).context("the price overflows")?;
         ensure!(want >= i.min_want_amount.units(), "the price is below the intent's minimum");
         let claim = self.neptune.call("htlc_claim_lock", json!({}))?;
         self.claim_index = claim["index"].as_u64().context("claim index")?;
-        let other = Chain::Ethereum.min_lock_secs();
+        let other = Chain::Base.min_lock_secs();
         let quote = Quote {
             v: PROTOCOL_VERSION,
             intent: intent.digest.clone(),
             want_amount: Amount::new(want),
             other_lock_secs: other,
-            neptune_lock_secs: other + Chain::Ethereum.gap_secs() + intents_protocol::NEPTUNE_SETTLE_SECS,
+            neptune_lock_secs: other + Chain::Base.gap_secs() + intents_protocol::NEPTUNE_SETTLE_SECS,
             hash_lock: None,
             claim_key: claim["claim_lock"].as_str().context("claim lock")?.to_string(),
             refund_key: eth_key_hex(&self.eth.address),
@@ -265,7 +267,7 @@ impl Solver {
         );
         let neptune_refund = npt.0.refund_after_ms / 1000;
         let evm_now = evm.node.now()?;
-        let refund_after = other_refund_at(Chain::Ethereum, neptune_refund, quote.body.other_lock_secs, evm_now)?;
+        let refund_after = other_refund_at(Chain::Base, neptune_refund, quote.body.other_lock_secs, evm_now)?;
         let receiver = parse_address(&accept.body.claim_key).context("user key")?;
         let hash_lock = parse_word(accept.body.hash_lock.as_deref().context("hash lock")?).context("hash lock")?;
         let amount = quote.body.want_amount.units();

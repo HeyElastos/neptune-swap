@@ -316,3 +316,14 @@ fn lock_messages_belong_to_one_deal_and_come_from_the_right_side() {
     let bad = EvmLocked { contract: "0x".to_string() + &"ab".repeat(19), ..evm };
     assert!(decode::<EvmLocked>(&signed(&bad, 2), NOW, Net::Test).is_err(), "contract without 0x, 40 hex");
 }
+
+#[test]
+fn eth_on_base_is_its_own_asset() {
+    let base = Intent { want: Asset { chain: Chain::Base, symbol: "USDC".into() }, ..intent() };
+    assert!(base.validate(NOW).is_ok());
+    let ela = Intent { want: Asset { chain: Chain::Base, symbol: "ELA".into() }, ..intent() };
+    assert!(ela.validate(NOW).is_err());
+    assert_eq!(asset_row(Chain::Base, "USDC"), Some((1_000_000, Some("833589fcd6edb6e08f4c7c32d4f71b54bda02913"))));
+    assert_ne!(asset_row(Chain::Base, "USDC"), asset_row(Chain::Ethereum, "USDC"));
+    assert_eq!((Chain::Base.evm_chain_id(), Chain::Neptune.evm_chain_id()), (Some(8453), None));
+}

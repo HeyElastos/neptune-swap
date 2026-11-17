@@ -52,6 +52,7 @@ pub use canonical::to_canonical_bytes;
 pub use did::DidKey;
 pub use error::Error;
 pub use message::{may_reveal, other_refund_at, Accept, Amount, Asset, Chain, EvmLocked, Intent, Message, NptLocked, Quote, ASSETS};
+pub use message::asset_row;
 pub use signed::{decode, Decoded, Net, Signed};
 pub use offer::{mul_div, Offer, OFFERS_TOPIC_MAIN, OFFERS_TOPIC_TEST};
 pub use seal::{open, seal, MAX_SEALED_BYTES};

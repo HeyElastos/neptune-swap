@@ -76,7 +76,29 @@ short; later, bonds.
 script, the EVM precompile and Solana all have SHA-256, so one hashlock works against
 all of them.
 
-## Resume here (paused 2026-11-16 evening)
+## Resume here (2026-11-17)
+
+Done today: the EVM leg's building blocks (see "EVM leg" below): Base in the protocol, the
+contract recognized by its code hash, `crates/intents-ui/src/evm_leg.rs` (Wallet bridge
+transactions, chain reads, lock checks, the secret from `Claimed` logs), the form on Base,
+and a runtime fork change that lets the app make typed chain reads. Not yet: the swap flow
+that drives these steps in the app (taker first), and a live run in the dev Home.
+
+Next, in order:
+1. **Taker flow in the app** (Review → Send to solvers): seal the intent to the offer's
+   solver, take the quote, accept, then per direction: user gives USDC/ETH → check the
+   solver's NPT lock (a provider op `htlc_check` against the agreed terms, so the capsule
+   needs no neptune-core), lock on Base, wait for the solver's claim, read the secret, claim
+   the NPT; refund on Base when the solver never claims. User gives NPT → lock NPT, check the
+   solver's Base lock (`evm_leg::check_lock`, contract code first), claim it.
+2. **Solver side in the app** (Offer page answers sealed intents).
+3. **Live run in the dev Home**: rebuild the fork (`cargo build --release -p elastos-server
+   --bin elastos`), restart `scripts/dev-home.sh`, a local anvil chain as Base with the
+   contract deployed (`scripts/evm-htlc-local.sh`), the native solver as counterparty.
+4. **ELA main chain** (below): the Neptune lock script with a revealing claim, P-256 in tasm.
+5. **Provider vaults** (below).
+
+## Paused 2026-11-16 evening (kept for reference)
 
 State: everything committed in this repo; the runtime fork's changes live as an uncommitted
 diff on branch `neptune-dev` in `the elastOS runtime checkout` and are saved in
@@ -457,3 +479,73 @@ refund before T refused → refund after T (giver 4.75 → 4.65). What this does
   `neptune-consensus/src/proof_abstractions/tx_proving_capability.rs`.
 - tasm-lib hashing: Tip5 only, no SHA-256 (`tasm-lib/src/hashing/`).
 - Capsule I/O via `POST /api/provider/<scheme>/<op>` with capability tokens (the Runtime's gateway provider proxy).
+
+## EVM leg (2026-11-17)
+
+- The other leg runs on **Base** (`Chain::Base`, eip155:8453), where elastOS Wallet's app
+  bridge pays; ETH and Circle's USDC there are their own assets (`asset_row(chain, symbol)`),
+  distinct from Ethereum main net's. Ethereum main net stays in the protocol for native
+  solvers; the app offers Base only. ESC was tried and dropped (user 2026-11-17: ELA on the
+  main chain, not ESC).
+- **The contract is recognized by its code, not its address.** `contracts/htlc-evm` builds
+  without metadata (`foundry.toml`), so the deployed code is reproducible;
+  `evm_htlc::RUNTIME_CODE_KECCAK` pins its keccak and `NeptuneHtlc.runtime.hex` is the
+  checked-in build (a test compares a fresh Foundry build with it). Anyone may deploy it;
+  a lock counts only in a contract whose `eth_getCode` hashes to the pin. No registry, no
+  deployer to trust. The contract is MIT now (was UNLICENSED).
+- `crates/intents-ui/src/evm_leg.rs`: `lock_txs` (ETH: one call with value; USDC: an exact
+  `approve` then `lockToken`), `claim_tx`, `refund_tx`, `check_lock` (terms, unspent, refund
+  at least the chain's gap before the Neptune refund, `may_reveal`), `secret_from_logs`;
+  through the bridge: `send` (request-transaction → Wallet approval → broadcast → receipt),
+  `read`, `check_contract`, `lock_view`, `claimed_secret`. The Wallet connection now keeps
+  the account id with the address (transactions need both).
+- **Runtime fork**: the bridge's chain reads needed the Browser's internet consent, which
+  only the Browser app can hold. For the other bridge apps (`neptune-swap`) reads now skip
+  that consent but are limited to `eth_blockNumber`, `eth_call`, `eth_getCode`,
+  `eth_getLogs`, `eth_getTransactionReceipt`, through the chain provider, audited as before
+  (`gateway_browser_wallet_reads.rs`, `APP_CHAIN_READS`). Not yet covered by a fork test.
+- The EVM chain's clock: the bridge has no block-header read, so `may_reveal` uses the
+  local clock; the claim margin (1 h) dwarfs clock drift.
+
+## ELA main chain: a scriptless swap (design, 2026-11-17)
+
+The user's goal: NPT ↔ ELA on the **main chain**, not ESC. The main chain accepts only fixed
+signature programs (standard, multisig, cross-chain, deposit; anything else is "unknown
+signature type" in `RunPrograms`), so it has no hash lock and no refund path. ELA's
+standard signatures are ECDSA on P-256. The swap can still be atomic with no change to ELA,
+the way swaps with chains that have no scripts are done: all logic lives on the scripted
+side, here Neptune, and the ELA side is just a key nobody holds alone.
+
+- ELA is paid to the standard address of the point `P = Pe + Pn` (P-256): `xe` belongs to
+  the ELA giver, `xn` to the NPT giver. Neither can spend it alone; whoever learns the other
+  share spends with `xe + xn`.
+- The NPT giver locks NPT first, in a Neptune lock script with three paths:
+  - **claim** (before T1): the ELA giver's spending key, a release value `r` with
+    SHA-256(r) = R, and the transaction must **publish `xe`** in a public announcement, with
+    `xe·G = Pe` checked in the script;
+  - **refund** (T1 to T2): the NPT giver's key, and it must **publish `xn`** (`xn·G = Pn`);
+  - **punish** (after T2): the ELA giver takes the NPT.
+- Steps: NPT locked → the ELA giver checks it and pays ELA to `P` → the NPT giver sees the
+  ELA confirmed and sends `r` → the ELA giver claims the NPT, publishing `xe` → the NPT giver
+  spends the ELA. If `r` never comes, the NPT giver must refund before T2 (publishing `xn`,
+  so the ELA giver takes its ELA back) or lose the NPT to the punish path.
+- Unlike today's HTLC (whose claim publishes nothing on Neptune), these paths must publish a
+  value: Neptune transaction kernels carry public announcements, and the lock script can
+  require one.
+- The cost: P-256 scalar multiplication in tasm (256-bit field arithmetic on u32 limbs;
+  millions of cycles, proved by the claimer). That is the main work, and the main thing to
+  review. To check first: that kernel announcements are bound into what the lock script
+  sees (the kernel MAST hash), ELA's exact signature hash and address derivation for a
+  point, and a lighter way to tie `xe` to `Pe` (a proof made off-chain once per swap).
+
+## Provider vaults instead of pools (idea, 2026-11-17)
+
+AMM pools put everyone's funds in one contract with an on-chain price that can be pushed
+(flash loans, sandwiches) and one bug that empties it. Here each provider keeps its own
+funds and quotes its own price; the board of offers is the liquidity, and every trade is a
+bilateral atomic swap. A **vault** makes that liquidity provable: a provider locks X ETH or
+USDC on Base (and NPT in a Neptune lock script) until a set time; the vault can only open
+swap locks or return to its owner when the time runs out. Offers that name a vault are
+backed on chain and rank first, which also answers spam on the public board. A watchtower
+in the provider's node claims for it when it is offline.
+

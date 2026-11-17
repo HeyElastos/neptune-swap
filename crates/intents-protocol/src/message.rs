@@ -17,9 +17,24 @@ pub enum Chain {
     Neptune,
     Bitcoin,
     Ethereum,
+    /// Base (EVM, chain id 8453), where elastOS Wallet pays.
+    Base,
 }
 
 impl Chain {
+    /// The EIP-155 chain id of an EVM chain; None for the UTXO chains.
+    pub fn evm_chain_id(self) -> Option<u64> {
+        match self {
+            Chain::Ethereum => Some(1),
+            Chain::Base => Some(8453),
+            Chain::Neptune | Chain::Bitcoin => None,
+        }
+    }
+
+    pub fn is_evm(self) -> bool {
+        self.evm_chain_id().is_some()
+    }
+
     /// Shortest HTLC the NPT giver can safely claim from: time to confirm the lock,
     /// then [`Chain::claim_margin_secs`] to spare.
     pub fn min_lock_secs(self) -> u64 {
@@ -57,21 +72,32 @@ impl Chain {
         match self {
             Chain::Neptune => 80,
             Chain::Bitcoin => 66,
-            Chain::Ethereum => 40,
+            Chain::Ethereum | Chain::Base => 40,
         }
     }
 }
 
 /// Every asset the protocol trades: chain, symbol, smallest units per coin, and the
 /// token contract where the asset is one. A verifier checks a lock against this row,
-/// never against a symbol alone. Only chains that lock by themselves are listed: no
-/// bridges. ELA joins when the Elastos main chain has an HTLC program.
-pub const ASSETS: [(Chain, &str, u128, Option<&str>); 4] = [
+/// never against a symbol alone: ETH on Ethereum and ETH on Base are different assets.
+/// Every chain here locks by itself (an HTLC on the chain): no bridge is ever part of a
+/// swap. USDC is Circle's own on each chain, not a bridged copy. The Elastos main chain
+/// accepts only fixed signature programs (no hash lock, no refund path), so ELA joins
+/// through a scriptless swap (PLAN.md, "ELA main chain"), not an HTLC there.
+pub const ASSETS: [(Chain, &str, u128, Option<&str>); 6] = [
     (Chain::Neptune, "NPT", 4 * 10u128.pow(30), None),
     (Chain::Ethereum, "ETH", 10u128.pow(18), None),
     (Chain::Ethereum, "USDC", 10u128.pow(6), Some("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")),
+    (Chain::Base, "ETH", 10u128.pow(18), None),
+    (Chain::Base, "USDC", 10u128.pow(6), Some("833589fcd6edb6e08f4c7c32d4f71b54bda02913")),
     (Chain::Bitcoin, "BTC", 10u128.pow(8), None),
 ];
+
+/// The listed row of an asset: smallest units per coin, and its token contract (None for a
+/// chain's native coin).
+pub fn asset_row(chain: Chain, symbol: &str) -> Option<(u128, Option<&'static str>)> {
+    ASSETS.iter().find(|(c, s, ..)| *c == chain && *s == symbol).map(|(_, _, units, token)| (*units, *token))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

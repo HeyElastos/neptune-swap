@@ -20,11 +20,14 @@ Neptune node. Read PLAN.md first: it has the design, the rules and the current s
 ## Where help is needed
 
 - **Solver side in the app**: answering takers' sealed requests from the Offer page.
-- **The EVM leg through elastOS Wallet**: Base and Elastos ESC in the protocol, the lock,
-  claim and refund calls from the capsule (see `docs/wallet-bridge.md`).
+- **The swap flow in the app**: driving `evm_leg.rs` (Base, through elastOS Wallet) and the
+  Neptune HTLC ops from the swap form (see `docs/wallet-bridge.md`).
 - **Spam resistance for public offers**: proof of work or a stake, solver reputation, a signed
   solver list.
 - **Price reports over the carrier**, signed, so no Home has to ask public sources itself.
+- **ELA on the Elastos main chain**: a scriptless swap (PLAN.md, "ELA main chain"); the big
+  piece is P-256 scalar multiplication in tasm for the Neptune lock script.
+- **Provider vaults**: provable liquidity instead of pools (PLAN.md, "Provider vaults").
 - **Bitcoin**: the HTLC script and a Wallet that can send BTC.
 - **Review**: the HTLC lock script, the timelock rules and the runtime patch deserve more eyes.
 

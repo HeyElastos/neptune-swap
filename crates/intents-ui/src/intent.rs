@@ -15,14 +15,15 @@ pub struct AssetDef {
     pub unit: u128,
 }
 
-/// NPT and ELA first: both live on UTXO chains, like Bitcoin. ELA (1 ELA = 10^8 sela) is shown
-/// but not offered until the Elastos main chain has an HTLC program: the protocol trades only
-/// assets on chains that lock by themselves, never through a bridge.
+/// NPT and ELA first: both live on UTXO chains, like Bitcoin. ELA on the Elastos main chain
+/// (1 ELA = 10^8 sela) is shown but not offered yet: the main chain has no HTLC program, so it
+/// joins through a scriptless swap, still being built. Never through a bridge. USDC and ETH
+/// are on Base, where elastOS Wallet pays.
 pub const ASSETS: [AssetDef; 5] = [
     AssetDef { chain: Some(Chain::Neptune), symbol: "NPT", letter: "N", network: "Neptune", decimals: 30, unit: 4 },
-    AssetDef { chain: None, symbol: "ELA", letter: "E", network: "Needs a main-chain HTLC", decimals: 8, unit: 1 },
-    AssetDef { chain: Some(Chain::Ethereum), symbol: "USDC", letter: "U", network: "Ethereum", decimals: 6, unit: 1 },
-    AssetDef { chain: Some(Chain::Ethereum), symbol: "ETH", letter: "Ξ", network: "Ethereum", decimals: 18, unit: 1 },
+    AssetDef { chain: None, symbol: "ELA", letter: "E", network: "Elastos main chain · coming", decimals: 8, unit: 1 },
+    AssetDef { chain: Some(Chain::Base), symbol: "USDC", letter: "U", network: "Base", decimals: 6, unit: 1 },
+    AssetDef { chain: Some(Chain::Base), symbol: "ETH", letter: "Ξ", network: "Base", decimals: 18, unit: 1 },
     AssetDef { chain: Some(Chain::Bitcoin), symbol: "BTC", letter: "B", network: "Bitcoin", decimals: 8, unit: 1 },
 ];
 
@@ -49,7 +50,7 @@ pub fn build(form: &Form, id: String, now: u64) -> Result<Intent, String> {
         return Err("Pick two different assets.".into());
     }
     let chain = |asset: &AssetDef| {
-        asset.chain.ok_or(format!("{} swaps open when the Elastos main chain has an HTLC.", asset.symbol))
+        asset.chain.ok_or(format!("{} swaps on the main chain are coming: a scriptless swap, still being built.", asset.symbol))
     };
     let (give_chain, want_chain) = (chain(give)?, chain(want)?);
     let amount = |text: &str, asset: &AssetDef| {
@@ -108,17 +109,17 @@ mod tests {
     }
 
     #[test]
-    fn ela_is_shown_but_not_offered_without_a_main_chain_htlc() {
+    fn main_chain_ela_is_shown_but_not_offered_yet() {
         assert_eq!(
             build(&form(1, "12.5", 0, "3"), ID.into(), NOW).unwrap_err(),
-            "ELA swaps open when the Elastos main chain has an HTLC."
+            "ELA swaps on the main chain are coming: a scriptless swap, still being built."
         );
     }
 
     #[test]
     fn every_offered_asset_is_the_protocols_with_the_same_units() {
         let offered: Vec<_> = ASSETS.iter().filter(|a| a.chain.is_some()).collect();
-        assert_eq!(offered.len(), intents_protocol::ASSETS.len());
+        assert_eq!(offered.len(), 4);
         for asset in offered {
             let (_, _, per_coin, _) = intents_protocol::ASSETS
                 .iter()

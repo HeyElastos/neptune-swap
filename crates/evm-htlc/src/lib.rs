@@ -13,6 +13,20 @@ use sha3::Keccak256;
 pub type Address = [u8; 20];
 pub type Word = [u8; 32];
 
+/// keccak256 of `NeptuneHtlc`'s deployed code, built from `contracts/htlc-evm` with its
+/// `foundry.toml` (no metadata, so the build is reproducible). A lock counts only in a
+/// contract whose code (`eth_getCode`) has this hash: the contract is recognized by what it
+/// does, never by its address or by who deployed it, so no registry or deployer is trusted.
+pub const RUNTIME_CODE_KECCAK: Word = [
+    0xda, 0x6b, 0x4d, 0x8a, 0x99, 0xe7, 0x06, 0x5d, 0xb7, 0x72, 0xff, 0xee, 0x9a, 0x41, 0x06, 0x3b,
+    0x6c, 0x65, 0x0e, 0x37, 0xa5, 0x53, 0x7d, 0xcb, 0x19, 0xc2, 0xc9, 0xa4, 0xfb, 0x20, 0xfa, 0x3b,
+];
+
+/// Whether `code` (as `eth_getCode` returns it) is `NeptuneHtlc`.
+pub fn is_htlc_code(code: &[u8]) -> bool {
+    keccak(code) == RUNTIME_CODE_KECCAK
+}
+
 /// The secret's hash lock: SHA-256 of the 32 bytes, as on the Neptune side.
 pub fn hash_lock(secret: &Word) -> Word {
     sha2::Sha256::digest(secret).into()
@@ -242,6 +256,21 @@ mod tests {
         assert!(decode_lock(&ret).is_none(), "a bool is 0 or 1");
         assert!(decode_lock(&ret[..32]).is_none());
         assert_eq!(hex(&locks(&[0; 32])[..4]), "0xed5e8437"); // cast sig "locks(bytes32)"
+    }
+
+    #[test]
+    fn the_pinned_code_hash_is_the_checked_in_build() {
+        let code = parse_hex(include_str!("../../../contracts/htlc-evm/NeptuneHtlc.runtime.hex")).unwrap();
+        assert!(is_htlc_code(&code));
+        assert!(!is_htlc_code(&code[1..]));
+        // When Foundry has built the contract here, the build must match the checked-in code.
+        let artifact = concat!(env!("CARGO_MANIFEST_DIR"), "/../../contracts/htlc-evm/out/NeptuneHtlc.sol/NeptuneHtlc.json");
+        if let Ok(json) = std::fs::read_to_string(artifact) {
+            let at = json.find("\"deployedBytecode\"").unwrap();
+            let start = json[at..].find("\"object\":\"").unwrap() + at + 10;
+            let end = json[start..].find('"').unwrap() + start;
+            assert_eq!(parse_hex(&json[start..end]).unwrap(), code, "rebuild changed the code: update the pin");
+        }
     }
 
     #[test]

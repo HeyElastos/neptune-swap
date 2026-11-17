@@ -3107,6 +3107,7 @@ dependencies = [
  "base64 0.22.1",
  "console_error_panic_hook",
  "ed25519-dalek",
+ "evm-htlc",
  "getrandom 0.2.17",
  "intents-protocol",
  "js-sys",

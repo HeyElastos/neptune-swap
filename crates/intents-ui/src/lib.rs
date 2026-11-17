@@ -3,6 +3,7 @@
 //! the same rules.
 
 mod backdrop;
+mod evm_leg;
 mod intent;
 mod offers;
 mod offers_ui;
@@ -57,13 +58,13 @@ pub fn run() -> Result<(), slint::PlatformError> {
         app.on_review(move || review(&weak.unwrap(), prices.borrow().as_ref()));
     }
     // The account elastOS Wallet disclosed for the EVM side, once connected.
-    let account: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let account: Rc<RefCell<Option<evm_leg::Account>>> = Rc::new(RefCell::new(None));
     {
         let (weak, prices, account) = (app.as_weak(), prices.clone(), account.clone());
         app.on_amounts_changed(move || {
             let app = weak.unwrap();
             show_usd(&app, prices.borrow().as_ref());
-            show_other_leg(&app, account.borrow().as_deref());
+            show_other_leg(&app, account.borrow().as_ref());
             offers_ui::form_changed(&app);
         });
     }
@@ -143,25 +144,26 @@ fn shot_and_quit(app: &AppWindow, path: String) {
     });
 }
 
-/// The chain elastOS Wallet pays on for the EVM side: Base. Its app bridge
-/// serves Base and Elastos ESC, not Ethereum main net.
-const WALLET_CHAIN: (&str, &str) = ("eip155:8453", "Base");
+/// The chain elastOS Wallet pays on for the EVM side: Base (its app bridge does not
+/// serve Ethereum main net).
+const WALLET_CHAIN: (&str, &str) = (evm_leg::BASE, "Base");
 
 /// What the form says about the side that is not NPT.
-fn show_other_leg(app: &AppWindow, account: Option<&str>) {
+fn show_other_leg(app: &AppWindow, account: Option<&evm_leg::Account>) {
     let symbol = |i: i32| intent::ASSETS.get(i as usize).map_or("", |a| a.symbol);
     let other = [symbol(app.get_give_index()), symbol(app.get_want_index())].into_iter().find(|s| *s != "NPT").unwrap_or("");
     let (state, text) = match (other, account) {
-        ("ETH" | "USDC", Some(address)) => (
+        ("ETH" | "USDC", Some(account)) => (
             "connected",
             format!(
                 "{other} side: your elastOS Wallet account {} on {}. Wallet asks you to approve each payment, the way you set it up (passkey, MetaMask).",
-                short_address(address),
+                short_address(&evm_htlc::hex(&account.address)),
                 WALLET_CHAIN.1
             ),
         ),
         ("ETH" | "USDC", None) => ("connect", format!("Connect elastOS Wallet for the {other} side ({})", WALLET_CHAIN.1)),
         ("BTC", _) => ("info", "Bitcoin side: elastOS Wallet cannot send Bitcoin yet.".to_string()),
+        ("ELA", _) => ("info", "ELA on the Elastos main chain: coming, as a scriptless swap (no bridge, no ESC).".to_string()),
         _ => ("", String::new()),
     };
     if app.get_other_leg_state() != "asking" || state == "connected" {
@@ -176,7 +178,7 @@ fn short_address(address: &str) -> String {
 
 /// Asks elastOS Wallet for the account on `WALLET_CHAIN`; the user approves
 /// in the Wallet app (once per 12 hours for this page).
-async fn connect_wallet(weak: Weak<AppWindow>, account: Rc<RefCell<Option<String>>>, token: String) {
+async fn connect_wallet(weak: Weak<AppWindow>, account: Rc<RefCell<Option<evm_leg::Account>>>, token: String) {
     let (page_url, origin) = runtime::page_and_origin();
     let fail = |weak: &Weak<AppWindow>, message: String| {
         if let Some(app) = weak.upgrade() {
@@ -199,44 +201,20 @@ async fn connect_wallet(weak: Weak<AppWindow>, account: Rc<RefCell<Option<String
     if request_id.is_empty() {
         return fail(&weak, "elastOS Wallet did not open an approval.".into());
     }
-    let query = format!(
-        "/api/apps/browser/wallet/approvals/{request_id}?page_url={}&origin={}",
-        js_escape(&page_url),
-        js_escape(&origin)
-    );
-    for _ in 0..300 {
-        runtime::sleep_ms(2_000).await;
-        match runtime::gateway("GET", &query, None, &token).await {
-            Ok(status) if status["status"] == "completed" => {
-                let address = status["account_access"]["address"].as_str().unwrap_or_default().to_string();
-                if address.is_empty() {
-                    return fail(&weak, "elastOS Wallet approved without an account.".into());
-                }
-                *account.borrow_mut() = Some(address);
-                if let Some(app) = weak.upgrade() {
-                    app.set_other_leg_state("connected".into());
-                    show_other_leg(&app, account.borrow().as_deref());
-                }
-                return;
-            }
-            Ok(status) if matches!(status["status"].as_str(), Some("pending" | "approved")) => continue,
-            Ok(status) => {
-                return fail(&weak, format!("elastOS Wallet: the request was {}.", status["status"].as_str().unwrap_or("not approved")))
-            }
-            Err(e) => return fail(&weak, format!("elastOS Wallet: {}", e.message)),
-        }
+    let status = match evm_leg::wait_approval(&request_id, &token).await {
+        Ok(status) => status,
+        Err(message) => return fail(&weak, message),
+    };
+    let access = &status["account_access"];
+    let found = access["address"].as_str().and_then(evm_htlc::parse_address).zip(access["account_id"].as_str().filter(|id| !id.is_empty()));
+    let Some((address, id)) = found else {
+        return fail(&weak, "elastOS Wallet approved without an account.".into());
+    };
+    *account.borrow_mut() = Some(evm_leg::Account { id: id.to_string(), address });
+    if let Some(app) = weak.upgrade() {
+        app.set_other_leg_state("connected".into());
+        show_other_leg(&app, account.borrow().as_ref());
     }
-    fail(&weak, "elastOS Wallet: no answer within ten minutes.".into());
-}
-
-/// Percent-encodes a query value.
-fn js_escape(text: &str) -> String {
-    text.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (b as char).to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }
 
 /// The USD lines for the form as it stands.

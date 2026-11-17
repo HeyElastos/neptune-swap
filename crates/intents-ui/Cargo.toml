@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 qrcode = { version = "0.14.1", default-features = false }
 intents-protocol = { path = "../intents-protocol" }
+evm-htlc = { path = "../evm-htlc" }
 base64 = "0.22"
 serde_json.workspace = true
 # Slint drawing with winit and femtovg (WebGL2 on the web).
