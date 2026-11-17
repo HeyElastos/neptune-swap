@@ -8,8 +8,8 @@ mod intent;
 mod offers;
 mod offers_ui;
 mod qr;
-#[allow(dead_code)] // driven by swap_ui (next commit)
 mod swap;
+mod swap_ui;
 mod runtime;
 mod usd;
 mod wallet_ui;
@@ -55,12 +55,18 @@ pub fn run() -> Result<(), slint::PlatformError> {
 
     let token = runtime::home_token();
     let prices: Rc<RefCell<Option<Value>>> = Rc::new(RefCell::new(None));
-    {
-        let (weak, prices) = (app.as_weak(), prices.clone());
-        app.on_review(move || review(&weak.unwrap(), prices.borrow().as_ref()));
-    }
     // The account elastOS Wallet disclosed for the EVM side, once connected.
     let account: Rc<RefCell<Option<evm_leg::Account>>> = Rc::new(RefCell::new(None));
+    {
+        let (weak, prices, account, has_token) = (app.as_weak(), prices.clone(), account.clone(), token.is_some());
+        app.on_review(move || {
+            let app = weak.unwrap();
+            review(&app, prices.borrow().as_ref());
+            let (ready, note) = swap_ui::send_state(&app, account.borrow().as_ref(), has_token);
+            app.set_send_ready(ready);
+            app.set_send_note(note.into());
+        });
+    }
     {
         let (weak, prices, account) = (app.as_weak(), prices.clone(), account.clone());
         app.on_amounts_changed(move || {
@@ -102,6 +108,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
     }
 
     wallet_ui::wire(&app, token.clone());
+    swap_ui::wire(&app, token.clone(), account.clone());
     offers_ui::wire(&app, token.clone());
     demo(&app);
     match token {
@@ -346,6 +353,8 @@ async fn load_status(weak: Weak<AppWindow>, token: Option<String>) {
             let height = data["height"].as_u64().unwrap_or_default();
             let label = format!("Block {}", group_thousands(height));
             set_node(&app, "ok", &label, &format!("Your node on {network}, outbound only."));
+            // An open swap on this network picks up where it was.
+            app.invoke_swap_resume();
         }
         Err(e) => {
             let detail = NODE_MESSAGES.iter().find(|(code, _)| *code == e.code).map_or(e.message.as_str(), |m| m.1);
@@ -375,6 +384,10 @@ fn demo(app: &AppWindow) {
         _ => {}
     }
     let Some(state) = runtime::query("demo") else { return };
+    if state.starts_with("swap") {
+        swap_ui::demo(app, &state);
+        return;
+    }
     if state.starts_with("wallet") {
         wallet_ui::demo(app, &state);
         return;
@@ -398,6 +411,9 @@ fn demo(app: &AppWindow) {
     }
     if state == "review" {
         review(app, None);
+        let (ready, note) = swap_ui::send_state(app, None, false);
+        app.set_send_ready(ready);
+        app.set_send_note(note.into());
         return;
     }
     // A popover anchors to its trigger, so it opens once the window has laid out.

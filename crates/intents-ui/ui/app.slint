@@ -251,6 +251,60 @@ export struct ActivityRow {
 }
 
 // An address handed out: which one, and what it received. A row opens it.
+export struct StepRow {
+    text: string,
+    // "done", "now", "todo" or "failed"
+    state: string,
+}
+
+// The swap in progress: what it is, where it stands, the steps of its direction.
+component SwapCard inherits VerticalLayout {
+    in property <string> title;
+    in property <string> line;
+    in property <[StepRow]> steps;
+    in property <bool> finished;
+    callback dismiss();
+    padding: Sp.l;
+    spacing: Sp.s;
+    HorizontalLayout {
+        spacing: Sp.s;
+        Text { text: root.finished ? "Swap" : "Swap in progress"; color: Skin.ink; font-size: Ty.body; font-weight: Ty.strong; vertical-alignment: center; }
+        Text { text: root.title; color: Skin.muted; font-size: Ty.caption; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; horizontal-alignment: right; }
+    }
+    for step in root.steps: HorizontalLayout {
+        spacing: Sp.s;
+        Text {
+            width: 18px;
+            text: step.state == "done" ? "✓" : step.state == "now" ? "●" : step.state == "failed" ? "✕" : "○";
+            color: step.state == "done" ? Skin.good : step.state == "now" ? Skin.accent-text : step.state == "failed" ? Skin.danger : Skin.faint;
+            font-size: Ty.small;
+            vertical-alignment: center;
+        }
+        Text {
+            text: step.text;
+            color: step.state == "todo" ? Skin.faint : Skin.ink;
+            font-size: Ty.small;
+            font-weight: step.state == "now" ? Ty.strong : 400;
+            horizontal-stretch: 1;
+            wrap: word-wrap;
+        }
+    }
+    Text { text: root.line; color: Skin.muted; font-size: Ty.small; wrap: word-wrap; }
+    Text {
+        text: "Funds stay in your Neptune wallet and your Wallet account until each step checks out; keep this page or Home open while it runs.";
+        color: Skin.faint;
+        font-size: Ty.caption;
+        wrap: word-wrap;
+        visible: !root.finished;
+    }
+    if root.finished: Text {
+        text: "Close";
+        color: Skin.accent-text;
+        font-size: Ty.small;
+        TouchArea { mouse-cursor: pointer; clicked => { root.dismiss(); } }
+    }
+}
+
 export struct AddressRow {
     title: string,
     detail: string,
@@ -821,6 +875,16 @@ export component AppWindow inherits Window {
 
     // The review sheet.
     in-out property <bool> review-open;
+    in property <bool> send-ready;
+    in property <string> send-note;
+    callback send-swap();
+    in property <bool> swap-on;
+    in property <string> swap-title;
+    in property <string> swap-line;
+    in property <bool> swap-finished;
+    in property <[StepRow]> swap-steps;
+    callback swap-dismiss();
+    callback swap-resume();
     in property <string> sum-give;
     in property <string> sum-want;
     in property <string> sum-until;
@@ -1245,6 +1309,17 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    if root.page == 0 && root.swap-on: Glass {
+                        height: swap-card.preferred-height;
+                        swap-card := SwapCard {
+                            width: parent.width;
+                            title: root.swap-title;
+                            line: root.swap-line;
+                            steps: root.swap-steps;
+                            finished: root.swap-finished;
+                            dismiss => { root.swap-dismiss(); }
+                        }
+                    }
                     if root.page == 0: Glass {
                         height: offers-card.preferred-height;
                         offers-card := OffersCard {
@@ -1345,7 +1420,7 @@ export component AppWindow inherits Window {
                     }
                 }
                 Text {
-                    text: "Next: a one-time DID signs it, and it goes sealed to a few solvers. Nobody else sees it.";
+                    text: root.send-note;
                     color: Skin.muted;
                     font-size: Ty.small;
                     wrap: word-wrap;
@@ -1379,8 +1454,9 @@ export component AppWindow inherits Window {
                         clicked => { root.review-open = false; }
                     }
                     Button {
-                        text: "Send to solvers";
-                        enabled: false;
+                        text: "Send to solver";
+                        enabled: root.send-ready;
+                        clicked => { root.send-swap(); }
                     }
                 }
             }

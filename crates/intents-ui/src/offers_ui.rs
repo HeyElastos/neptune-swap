@@ -213,12 +213,29 @@ async fn hear(state: &Shared, net: Net, topic: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn join(topic: &str, token: &str) -> Result<(), String> {
+pub(crate) async fn join(topic: &str, token: &str) -> Result<(), String> {
     match runtime::peer("gossip_join", &json!({ "topic": topic }), token).await {
         Ok(_) => Ok(()),
         Err(e) if e.code == "already_joined" || e.message.contains("already") => Ok(()),
         Err(e) => Err(e.message),
     }
+}
+
+/// The solver of the offer the form was filled from, while the form still shows exactly
+/// that offer's pair and amounts: the swap goes to that solver.
+pub fn taken_offer(app: &AppWindow) -> Option<String> {
+    STATE.with(|s| {
+        let state = s.borrow().clone()?;
+        let s = state.borrow();
+        let filled = s.filled.as_ref()?;
+        let o = &filled.listed.offer;
+        let same = def_index(&o.want.symbol) == Some(app.get_give_index() as usize)
+            && def_index(&o.give.symbol) == Some(app.get_want_index() as usize)
+            && app.get_give_amount().trim() == filled.give_text
+            && app.get_want_amount().trim() == filled.want_text
+            && s.board.get(&filled.listed.solver, &o.id).is_some();
+        same.then(|| filled.listed.solver.clone())
+    })
 }
 
 /// The rows for the form's pair.

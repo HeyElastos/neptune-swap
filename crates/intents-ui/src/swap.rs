@@ -128,6 +128,7 @@ pub struct Swap {
     accepted_at: u64,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn did(key: &SigningKey) -> DidKey {
     DidKey::new(key.verifying_key())
 }
@@ -186,8 +187,18 @@ impl Swap {
     }
 
     /// This swap's one-time DID: messages sealed to it are this swap's.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn me(&self) -> String {
         did(&self.signing_key()).to_string()
+    }
+
+    /// The Base account the swap was accepted with (40 hex, no 0x).
+    pub fn account(&self) -> Option<&str> {
+        self.account.as_deref()
+    }
+
+    pub fn swap_id(&self) -> Option<&str> {
+        self.swap_id.as_deref()
     }
 
     pub fn intent(&self) -> &Intent {
@@ -454,15 +465,21 @@ impl Swap {
         ))
     }
 
-    /// The Base lock landed in `block`: the `evm_locked` message for the solver.
-    pub fn evm_lock_sent(&mut self, block: u64, now: u64) -> Result<Vec<u8>, String> {
+    /// The id the user's Base lock gets (the contract derives it from the terms), known
+    /// before it is sent: a page reloaded mid-lock finds out whether it already landed.
+    pub fn planned_evm_id(&self) -> Result<Word, String> {
         let quote = self.quote()?;
         let give = &self.intent.body.give;
         let me = parse_address(self.account.as_deref().ok_or("no account")?).ok_or("account")?;
         let receiver = parse_address(&quote.body.claim_key).ok_or("the solver's Base key")?;
         let hash_lock = parse_word(quote.body.hash_lock.as_deref().ok_or("no hash lock")?).ok_or("hash lock")?;
         let token = evm_leg::token_of(give.chain, &give.symbol)?.unwrap_or([0; 20]);
-        let id = evm_htlc::lock_id(&me, &receiver, &token, self.intent.body.give_amount.units(), &hash_lock, self.evm_refund_after.ok_or("no refund time")?);
+        Ok(evm_htlc::lock_id(&me, &receiver, &token, self.intent.body.give_amount.units(), &hash_lock, self.evm_refund_after.ok_or("no refund time")?))
+    }
+
+    /// The Base lock landed in `block`: the `evm_locked` message for the solver.
+    pub fn evm_lock_sent(&mut self, block: u64, now: u64) -> Result<Vec<u8>, String> {
+        let id = self.planned_evm_id()?;
         let body = EvmLocked { v: PROTOCOL_VERSION, deal: self.accept_msg()?.digest, contract: no0x(&evm_htlc::HTLC_ADDRESS), id: hex(&id)[2..].to_string() };
         let (_, sealed) = self.sign_and_seal(&body, &self.solver.clone(), now)?;
         self.evm_id = Some(hex(&id)[2..].to_string());
@@ -712,6 +729,7 @@ mod tests {
         let notice: Decoded<EvmLocked> = solver_open(&swap.evm_lock_sent(1234, NOW + 3700).unwrap());
         assert_eq!(notice.body.contract, no0x(&evm_htlc::HTLC_ADDRESS));
         assert_eq!(swap.evm_from_block(), 1234);
+        assert_eq!(hex(&swap.planned_evm_id().unwrap())[2..], notice.body.id);
         assert_eq!(swap.step, Step::AwaitSecret);
 
         assert!(swap.npt_claim_request(&[6; 32]).is_err());

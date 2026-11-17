@@ -135,6 +135,23 @@ pub fn secret_from_logs(logs: &Value, contract: &Address, id: &Word, hash_lock: 
 
 // --- through the Wallet bridge ------------------------------------------------
 
+/// A mined transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sent {
+    pub hash: String,
+    pub block: u64,
+}
+
+/// A JSON-RPC quantity ("0x1a").
+pub fn quantity(v: &Value) -> Option<u64> {
+    u64::from_str_radix(v.as_str()?.strip_prefix("0x")?, 16).ok()
+}
+
+/// The chain's latest block number.
+pub async fn latest_block(namespace: &str, token: &str) -> Result<u64, String> {
+    quantity(&read(namespace, "eth_blockNumber", json!([]), token).await?).ok_or("Chain read: no height".into())
+}
+
 const BRIDGE: &str = "/api/apps/browser/wallet";
 
 /// Percent-encodes a query value.
@@ -202,8 +219,7 @@ pub fn log_pages(from: u64, latest: u64) -> Vec<(u64, u64)> {
 /// (the block of the user's own lock, from its receipt), page by page. The caller keeps
 /// asking until its Neptune claim deadline.
 pub async fn claimed_secret(namespace: &str, id: &Word, hash_lock: &Word, from_block: u64, token: &str) -> Result<Option<Word>, String> {
-    let latest = read(namespace, "eth_blockNumber", json!([]), token).await?;
-    let latest = latest.as_str().and_then(|h| u64::from_str_radix(h.trim_start_matches("0x"), 16).ok()).ok_or("Chain read: no height")?;
+    let latest = latest_block(namespace, token).await?;
     let topic = hex(&evm_htlc::keccak(b"Claimed(bytes32,bytes32)"));
     for (start, end) in log_pages(from_block, latest) {
         let filter = json!({ "address": hex(&HTLC_ADDRESS), "topics": [topic, hex(id)], "fromBlock": format!("0x{start:x}"), "toBlock": format!("0x{end:x}") });
@@ -217,13 +233,13 @@ pub async fn claimed_secret(namespace: &str, id: &Word, hash_lock: &Word, from_b
 
 /// Sends `tx` from `account`: Wallet shows it and the user approves, then it is broadcast
 /// and its receipt awaited. Returns the transaction hash. `waiting` gets a line for the
-/// screen at each stage.
+/// screen at each stage. Returns the transaction's hash and block.
 ///
 /// A claim is a reveal as soon as it leaves the page: its calldata carries the secret, and
 /// a claim that reverts or is not mined has still shown it to Wallet, the RPC and, once
 /// broadcast, everyone. The swap flow must then keep claiming until it lands, and never
 /// treat an error here as "safe to wait for the Neptune refund".
-pub async fn send(namespace: &str, account: &Account, tx: &Tx, token: &str, waiting: &dyn Fn(String)) -> Result<String, String> {
+pub async fn send(namespace: &str, account: &Account, tx: &Tx, token: &str, waiting: &dyn Fn(String)) -> Result<Sent, String> {
     let (page_url, origin) = runtime::page_and_origin();
     let from = hex(&account.address);
     let body = json!({
@@ -253,7 +269,7 @@ pub async fn send(namespace: &str, account: &Account, tx: &Tx, token: &str, wait
     for _ in 0..180 {
         let receipt = read(namespace, "eth_getTransactionReceipt", json!([hash]), token).await.unwrap_or(Value::Null);
         match receipt_ok(&receipt) {
-            Some(true) => return Ok(hash),
+            Some(true) => return Ok(Sent { block: quantity(&receipt["blockNumber"]).unwrap_or(0), hash }),
             Some(false) => return Err(format!("{}: the chain refused it (reverted).", tx.what)),
             None => runtime::sleep_ms(3_000).await,
         }
@@ -339,6 +355,13 @@ mod tests {
         assert_eq!(log_pages(10, 10), vec![(10, 10)]);
         assert_eq!(log_pages(0, 4_500), vec![(0, 1_999), (2_000, 3_999), (4_000, 4_500)]);
         assert!(log_pages(5, 4).is_empty());
+    }
+
+    #[test]
+    fn quantities_read_as_numbers() {
+        assert_eq!(quantity(&json!("0x1a")), Some(26));
+        assert_eq!(quantity(&json!("26")), None);
+        assert_eq!(quantity(&Value::Null), None);
     }
 
     #[test]
