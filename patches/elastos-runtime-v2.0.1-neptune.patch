@@ -1,3 +1,32 @@
+diff --git a/capsules/wallet-provider/src/approval.rs b/capsules/wallet-provider/src/approval.rs
+index dfa639f8..e9131814 100644
+--- a/capsules/wallet-provider/src/approval.rs
++++ b/capsules/wallet-provider/src/approval.rs
+@@ -882,8 +882,12 @@ impl WalletProvider {
+                 "approved request requires an external wallet signature handoff",
+             );
+         }
++        // Local Neptune development fork: the gateway projects one EVM account onto every
++        // Runtime-supported eip155 chain (browser_account_access_account); signing must accept
++        // the same family, or an account made for ESC can never approve on Base. The address
++        // and key are the same, and a transaction is signed with its own chain id (EIP-155).
+         if request.proof_binding_id != account.proof_binding_id
+-            || request.chain_namespace != account.chain_namespace
++            || !chain_namespaces_compatible(&account.chain_namespace, &request.chain_namespace)
+             || request.address != account.address
+             || request.proof_type != account.proof_type
+             || request.connector_id != account.connector_id
+@@ -1012,7 +1016,9 @@ fn validate_browser_account_access_payload(
+     if text("permission")? != "eth_accounts" {
+         return Err("Browser account access permission must be eth_accounts".to_string());
+     }
+-    if input.requested_by_actor != "browser" {
++    // Local Neptune development fork: the apps the gateway lets use the wallet bridge (it names
++    // the app from its launch token, never from the request).
++    if !matches!(input.requested_by_actor.as_str(), "browser" | "neptune-swap") {
+         return Err("Browser account access must be requested by Browser".to_string());
+     }
+     if !is_managed_proof_type(&account.proof_type) || account.connector_id.is_some() {
 diff --git a/elastos/crates/elastos-runtime/src/provider/registry.rs b/elastos/crates/elastos-runtime/src/provider/registry.rs
 index f96bcf74..3b71342f 100755
 --- a/elastos/crates/elastos-runtime/src/provider/registry.rs
@@ -578,6 +607,44 @@ index c6742ea3..9c3c7085 100644
 +        assert!(req("gossip_send", &json!({"topic": "neptune-swap", "message": ""}), "s").is_err());
 +    }
 +}
+diff --git a/elastos/crates/elastos-server/src/api/gateway_wallet_approvals.rs b/elastos/crates/elastos-server/src/api/gateway_wallet_approvals.rs
+index b6ab198f..f6aa79f5 100644
+--- a/elastos/crates/elastos-server/src/api/gateway_wallet_approvals.rs
++++ b/elastos/crates/elastos-server/src/api/gateway_wallet_approvals.rs
+@@ -539,12 +539,12 @@ fn wallet_account_access_review(value: &serde_json::Value) -> Option<serde_json:
+     if value.get("intent")?.as_str()? != "browser_account_access" {
+         return None;
+     }
+-    if value
+-        .get("requested_by_actor")
+-        .or_else(|| value.get("capsule_id"))?
+-        .as_str()?
+-        != BROWSER_CAPSULE_ID
+-    {
++    // Local Neptune development fork: the apps the gateway lets use the wallet bridge, named
++    // from their launch token; the review shows the origin the gateway pinned for them.
++    if !matches!(
++        value.get("requested_by_actor").or_else(|| value.get("capsule_id"))?.as_str()?,
++        BROWSER_CAPSULE_ID | "neptune-swap"
++    ) {
+         return None;
+     }
+     let payload = value.get("payload")?.as_object()?;
+diff --git a/elastos/crates/elastos-server/src/runtime_control.rs b/elastos/crates/elastos-server/src/runtime_control.rs
+index 5ed2ec1b..81f8b00e 100644
+--- a/elastos/crates/elastos-server/src/runtime_control.rs
++++ b/elastos/crates/elastos-server/src/runtime_control.rs
+@@ -1097,6 +1097,10 @@ fn managed_home_allow_resources() -> &'static [&'static str] {
+         // `Users/self` and rejects explicit non-active `Users/<root>` requests.
+         "localhost://Users/*",
+         "localhost://Local/SharedByLocalUsersAndBots/Home/*",
++        // Local Neptune development fork: USD reference prices. The user asks for them with a
++        // click in Neptune Swap that says the sources see this computer's address; v2.0.1's
++        // Home decides capability requests by this policy and shows no prompt of its own.
++        "elastos://neptune/prices",
+     ]
+ }
+ 
 diff --git a/elastos/crates/elastos-server/src/server_infra.rs b/elastos/crates/elastos-server/src/server_infra.rs
 index c575eed6..2f893a81 100644
 --- a/elastos/crates/elastos-server/src/server_infra.rs

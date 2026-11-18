@@ -1,0 +1,10 @@
+[package]
+name = "nusdc"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "nUSDC on Neptune: the token's rule (a draft), in plain Rust, that its type script is held to"
+
+[dependencies]
+neptune-consensus.workspace = true
+tasm-lib = "9.0.0"

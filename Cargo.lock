@@ -4136,6 +4136,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nusdc"
+version = "0.1.0"
+dependencies = [
+ "neptune-consensus",
+ "tasm-lib",
+]
+
+[[package]]
 name = "objc-sys"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

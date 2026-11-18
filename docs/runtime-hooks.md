@@ -43,6 +43,19 @@ the gateway sets.
   another's (already so in the bridge).
 - Open item: Wallet's audit records still name the Browser for these requests; they should
   name the app.
+- Found in the live test (each fixed in the fork, and each worth fixing upstream):
+  - Wallet's provider accepts account access only when requested by the Browser
+    (`approval.rs`: "must be requested by Browser").
+  - The gateway builds Wallet's review card (and with it the Allow button) only for the
+    Browser (`wallet_account_access_review`), so other apps' requests can only be rejected.
+  - **A bug for the Browser too:** the gateway projects one EVM account onto every supported
+    eip155 chain (`browser_account_access_account`), but Wallet's signing requires the
+    request's chain to equal the chain the account was made for. An account made for ESC can
+    never approve on Base ("wallet approval authority no longer matches its managed
+    account"). Signing should accept the same eip155 family; the transaction carries its own
+    chain id (EIP-155).
+  - Home's request notification has "Open", which starts a new instance of the app instead
+    of returning to the one that asked.
 
 ## 3. Typed chain reads for apps that show no web pages
 
