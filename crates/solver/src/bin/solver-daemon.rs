@@ -135,6 +135,14 @@ fn main() -> Result<()> {
             }
             published = Instant::now();
             println!("offers published ({})", config.offers.len());
+            // A peer that joined a topic after us never heard our first join: ask again.
+            if !config.peers.is_empty() {
+                for topic in [offers_topic, deals_topic] {
+                    if let Err(e) = carrier.join_with(topic, &config.peers) {
+                        eprintln!("joining the peers on {topic}: {e:#}");
+                    }
+                }
+            }
         }
 
         for sealed in carrier.recv(deals_topic).unwrap_or_default() {
