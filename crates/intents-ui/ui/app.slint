@@ -925,6 +925,7 @@ export component AppWindow inherits Window {
     in property <string> offers-status;
     in property <[AddressRow]> offer-rows;
     callback take-offer(int);
+    callback best-offer();
     in property <bool> offers-on;
     callback show-offers();
     in property <string> solver-did;
@@ -978,6 +979,17 @@ export component AppWindow inherits Window {
     // 0: the swap, 1: the wallet, 2: offers as a solver.
     // The page shown: 0 Swap, 1 Wallet, 2 Market, 3 Activity (the numbers Rust uses).
     in-out property <int> page;
+    // A page change fades the new page in and lifts it a little: set on the change, cleared a
+    // frame later so the state's "out" animation plays.
+    property <bool> entering;
+    enter-timer := Timer {
+        interval: 30ms;
+        running: false;
+        triggered => {
+            root.entering = false;
+            self.running = false;
+        }
+    }
     // A wide window gets a side rail; a phone a tab bar at the bottom.
     property <bool> wide: root.width >= 760px;
     property <[{label: string, icon: string, page: int}]> tabs: [
@@ -990,7 +1002,11 @@ export component AppWindow inherits Window {
         page == 0 ? 0 : page == 2 ? 1 : page == 3 ? 2 : 3
     }
     callback page-changed(int);
-    changed page => { root.page-changed(self.page); }
+    changed page => {
+        root.page-changed(self.page);
+        root.entering = true;
+        enter-timer.running = true;
+    }
 
     // The wallet card (see WalletCard).
     in property <string> wallet-state: "loading";
@@ -1218,9 +1234,19 @@ export component AppWindow inherits Window {
                 }
 
                 // The page scrolls under the bar; the lane is at most 520 wide.
-                Flickable {
+                page-flick := Flickable {
                     horizontal-stretch: 1;
                     vertical-stretch: 1;
+                    states [
+                        entering when root.entering: {
+                            page-flick.opacity: 0;
+                            page.y: 14px;
+                            out {
+                                animate page-flick.opacity { duration: 260ms; easing: Motion.ease; }
+                                animate page.y { duration: 320ms; easing: Motion.ease; }
+                            }
+                        }
+                    ]
                     content-width: self.width;
                     content-height: max(self.height, page.preferred-height);
                     page := HorizontalLayout {
@@ -1431,6 +1457,24 @@ export component AppWindow inherits Window {
                                 Segmented {
                                     options: ["5 min", "10 min", "30 min"];
                                     selected <=> root.ttl-index;
+                                }
+                            }
+                            // The market for this pair: which offer the form follows, and a button
+                            // that fetches the best one now.
+                            if root.in-home: HorizontalLayout {
+                                spacing: Sp.m;
+                                Text {
+                                    text: root.offers-status;
+                                    color: Skin.muted;
+                                    font-size: Ty.small;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    wrap: word-wrap;
+                                }
+                                Button {
+                                    text: "Find best offer";
+                                    primary: false;
+                                    clicked => { root.best-offer(); }
                                 }
                             }
                             if root.other-leg-state != "" && root.other-leg-state != "connect": Text {

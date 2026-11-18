@@ -90,6 +90,36 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
         app.on_take_offer(move |row| take(&weak.unwrap(), &state, row as usize));
     }
     {
+        // Fetch the best offer now: read the topic, follow the market again, take the best.
+        let (weak, state) = (app.as_weak(), state.clone());
+        app.on_best_offer(move || {
+            let (weak, state) = (weak.clone(), state.clone());
+            spawn(async move {
+                {
+                    let mut s = state.borrow_mut();
+                    s.manual = false;
+                    s.filled = None;
+                }
+                let Some(app) = weak.upgrade() else { return };
+                app.set_offers_status("Looking for the best offer…".into());
+                let network_id = network(&app);
+                drop(app);
+                if let Some(network_id) = network_id {
+                    let (net, topic) = net_of(&network_id);
+                    if let Err(message) = hear(&state, net, topic).await {
+                        if let Some(app) = weak.upgrade() {
+                            app.set_offers_status(message.into());
+                        }
+                        return;
+                    }
+                }
+                if let Some(app) = weak.upgrade() {
+                    show(&app, &state);
+                }
+            });
+        });
+    }
+    {
         let (weak, state) = (app.as_weak(), state.clone());
         app.on_publish_offer(move || spawn(publish(weak.clone(), state.clone())));
     }

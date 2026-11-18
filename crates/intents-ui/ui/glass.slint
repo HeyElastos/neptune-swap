@@ -20,7 +20,8 @@ export component Wallpaper inherits Image {
     source: Frost.wallpaper;
     width: Frost.width;
     height: Frost.height;
-    image-fit: fill;
+    // Cover, not fill: the picture keeps its shape (a round planet) at any window shape.
+    image-fit: cover;
 }
 
 export component Glass inherits Rectangle {
@@ -42,7 +43,8 @@ export component Glass inherits Rectangle {
             width: Frost.width;
             height: Frost.height;
             source: Frost.frost;
-            image-fit: fill;
+            // The same crop as the wallpaper, so each panel shows the frost of what is behind it.
+            image-fit: cover;
         }
         Rectangle { background: Skin.sheet.with-alpha(root.tint); }
         // Light from above: brighter toward the top edge.

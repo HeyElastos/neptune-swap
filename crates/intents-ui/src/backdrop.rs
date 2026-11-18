@@ -1,14 +1,15 @@
-//! The wallpaper under the glass and its frost: Neptune's deep blue with soft light, its rings and
-//! a few stars, drawn once; then a blurred copy that every glass panel shows the part of behind
+//! The wallpaper under the glass and its frost: a deep blue field with soft light and slow waves of
+//! fine lines, drawn once; then a blurred copy that every glass panel shows the part of behind
 //! it (downscale, then three box passes each way).
 
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 use tiny_skia::{
-    Color, FillRule, FilterQuality, GradientStop, Paint, PathBuilder, Pixmap, PixmapPaint, Point, RadialGradient, Rect,
-    SpreadMode, Stroke, Transform,
+    Color, FillRule, FilterQuality, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, PixmapPaint, Point, RadialGradient,
+    Rect, SpreadMode, Stroke, Transform,
 };
 
-/// Square, so `image-fit: cover` crops it the same for the wallpaper and the frost at any window shape.
+/// Square, so `image-fit: cover` crops it the same for the wallpaper and the frost at any window
+/// shape.
 const EDGE: u32 = 1200;
 /// The blurred copy's edge: the frost has no detail to lose and the panel scales it up.
 const FROST_EDGE: u32 = 160;
@@ -42,51 +43,79 @@ fn glow(pixmap: &mut Pixmap, x: f32, y: f32, radius: f32, hex: u32, alpha: f32) 
     pixmap.fill_rect(full, &paint, Transform::identity(), None);
 }
 
+/// The curve of one wave: y = y0 + a·sin(k·x + phase) + b·sin(2.3·k·x − 0.7·phase), sampled
+/// across the width.
+fn wave(y0: f32, a: f32, b: f32, k: f32, phase: f32) -> impl Fn(f32) -> f32 {
+    move |x| y0 + a * (k * x + phase).sin() + b * (2.3 * k * x - 0.7 * phase).sin()
+}
+
+fn curve(f: &impl Fn(f32) -> f32, close_below: bool) -> Option<tiny_skia::Path> {
+    let e = EDGE as f32;
+    let mut pb = PathBuilder::new();
+    pb.move_to(0.0, f(0.0));
+    for i in 1..=120 {
+        let x = e * i as f32 / 120.0;
+        pb.line_to(x, f(x));
+    }
+    if close_below {
+        pb.line_to(e, e);
+        pb.line_to(0.0, e);
+        pb.close();
+    }
+    pb.finish()
+}
+
+/// A paint fading in from the left edge and out at the right, `hex` at `alpha` in between.
+fn sweep(hex: u32, alpha: f32) -> Paint<'static> {
+    let e = EDGE as f32;
+    let stops = vec![
+        GradientStop::new(0.0, rgba(hex, alpha * 0.15)),
+        GradientStop::new(0.45, rgba(hex, alpha)),
+        GradientStop::new(1.0, rgba(hex, alpha * 0.25)),
+    ];
+    let shader = LinearGradient::new(Point::from_xy(0.0, 0.0), Point::from_xy(e, e * 0.2), stops, SpreadMode::Pad, Transform::identity())
+        .unwrap_or(tiny_skia::Shader::SolidColor(rgba(hex, alpha)));
+    Paint { shader, anti_alias: true, ..Paint::default() }
+}
+
 fn wallpaper(light: bool) -> Pixmap {
     let mut pixmap = Pixmap::new(EDGE, EDGE).expect("pixmap");
     let e = EDGE as f32;
+    // A deep blue field (never black) with soft light.
     if light {
-        pixmap.fill(rgba(0xDCE6F4, 1.0));
-        glow(&mut pixmap, e * 0.15, e * 0.10, e * 0.75, 0x8FB5FF, 0.85);
-        glow(&mut pixmap, e * 0.95, e * 0.55, e * 0.70, 0x7FD6D0, 0.70);
-        glow(&mut pixmap, e * 0.70, e * 0.95, e * 0.55, 0xF2C978, 0.55);
+        pixmap.fill(rgba(0xDDE7F6, 1.0));
+        glow(&mut pixmap, e * 0.15, e * 0.05, e * 0.80, 0x9EC0FF, 0.85);
+        glow(&mut pixmap, e * 0.98, e * 0.55, e * 0.70, 0x8EE0D6, 0.55);
+        glow(&mut pixmap, e * 0.05, e * 0.95, e * 0.70, 0xC9B8FF, 0.60);
     } else {
-        // A deep sea, never black: every corner keeps some light.
-        pixmap.fill(rgba(0x0C1636, 1.0));
-        glow(&mut pixmap, e * 0.18, e * 0.08, e * 0.85, 0x2E58E6, 0.85);
-        glow(&mut pixmap, e * 0.95, e * 0.55, e * 0.75, 0x10A2B0, 0.65);
-        glow(&mut pixmap, e * 0.05, e * 0.92, e * 0.70, 0x5B3FD0, 0.55);
-        glow(&mut pixmap, e * 0.65, e * 1.00, e * 0.60, 0xE7B85A, 0.35);
+        pixmap.fill(rgba(0x0B1640, 1.0));
+        glow(&mut pixmap, e * 0.10, e * 0.02, e * 0.95, 0x2A55E0, 0.75);
+        glow(&mut pixmap, e * 1.00, e * 0.45, e * 0.80, 0x1287C9, 0.50);
+        glow(&mut pixmap, e * 0.05, e * 1.00, e * 0.80, 0x5A3FD0, 0.50);
+        glow(&mut pixmap, e * 0.55, e * 0.62, e * 0.45, 0x3D7BFF, 0.22);
     }
 
-    // The planet's rings: crisp on the wallpaper, gone to light under the glass.
-    let ring = if light { rgba(0xFFFFFF, 0.75) } else { rgba(0xBFD3FF, 0.35) };
-    let paint = Paint { shader: tiny_skia::Shader::SolidColor(ring), anti_alias: true, ..Paint::default() };
-    let tilt = Transform::from_rotate_at(-18.0, e * 0.55, e * 0.42);
-    for (i, width) in [(0, 2.5), (1, 1.2), (2, 4.0)] {
-        let rx = e * (0.46 + 0.07 * i as f32);
-        let ry = rx * 0.22;
-        let Some(oval) = Rect::from_xywh(e * 0.55 - rx, e * 0.42 - ry, 2.0 * rx, 2.0 * ry) else { continue };
-        if let Some(path) = PathBuilder::from_oval(oval) {
-            let stroke = Stroke { width, ..Stroke::default() };
-            pixmap.stroke_path(&path, &paint, &stroke, tilt, None);
+    // Waves: soft filled swells, then ribbons of fine lines riding over them.
+    let line = if light { 0xFFFFFF } else { 0xBFD6FF };
+    let k = std::f32::consts::TAU / e;
+    let swells = [(0.58f32, 0.07f32, 0.02f32, 0.9f32, 0.6f32), (0.70, 0.06, 0.025, 1.2, 2.1), (0.82, 0.05, 0.02, 0.8, 4.0)];
+    for (y, a, b, f, phase) in swells {
+        let w = wave(e * y, e * a, e * b, k * f, phase);
+        if let Some(path) = curve(&w, true) {
+            pixmap.fill_path(&path, &sweep(line, if light { 0.10 } else { 0.06 }), FillRule::Winding, Transform::identity(), None);
         }
     }
-
-    // A few stars, placed by a small fixed sequence so every render is the same.
-    let star = if light { rgba(0xFFFFFF, 0.9) } else { rgba(0xFFFFFF, 0.8) };
-    let paint = Paint { shader: tiny_skia::Shader::SolidColor(star), anti_alias: true, ..Paint::default() };
-    let mut seed: u32 = 0x9E37_79B9;
-    for _ in 0..70 {
-        let mut next = || {
-            seed ^= seed << 13;
-            seed ^= seed >> 17;
-            seed ^= seed << 5;
-            seed as f32 / u32::MAX as f32
-        };
-        let (x, y, r) = (next() * e, next() * e, 0.6 + next() * 1.6);
-        if let Some(path) = PathBuilder::from_circle(x, y, r) {
-            pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+    let ribbons = [(0.50f32, 0.09f32, 0.03f32, 0.85f32, 0.3f32, 0.55f32), (0.66, 0.07, 0.03, 1.15, 2.4, 0.40)];
+    for (y, a, b, f, phase, alpha) in ribbons {
+        for i in 0..28 {
+            let t = i as f32 / 27.0;
+            // The lines fan out from one edge of the ribbon to the other, brightest at its heart.
+            let w = wave(e * (y + t * 0.06), e * a * (1.0 - 0.35 * t), e * b, k * f, phase + t * 0.9);
+            let strength = alpha * (1.0 - (2.0 * t - 1.0).abs()).powf(0.7) * 0.35 + 0.02;
+            if let Some(path) = curve(&w, false) {
+                let stroke = Stroke { width: 1.1, ..Stroke::default() };
+                pixmap.stroke_path(&path, &sweep(line, strength), &stroke, Transform::identity(), None);
+            }
         }
     }
     pixmap
