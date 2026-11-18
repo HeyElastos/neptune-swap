@@ -35,6 +35,9 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
     runtime::listen_clipboard();
 
     let on = |page: &Shared| (app.as_weak(), page.clone());
+    if page.borrow().token.is_some() {
+        spawn(keep_synced(app.as_weak(), page.clone()));
+    }
     {
         let (weak, page) = on(&page);
         app.on_page_changed(move |index| {
@@ -332,6 +335,28 @@ async fn import(weak: Weak<AppWindow>, page: Shared) {
 }
 
 /// Syncs until the wallet reaches the node's tip, then reads the balance.
+/// Keeps the wallet at the node's tip while the app is open: loads it once a network is
+/// chosen, then syncs every half minute unless something else is running.
+async fn keep_synced(weak: Weak<AppWindow>, page: Shared) {
+    loop {
+        runtime::sleep_ms(5_000).await;
+        let Some(app) = weak.upgrade() else { return };
+        let (state, busy, network) = (app.get_wallet_state(), app.get_wallet_busy(), network(&app));
+        drop(app);
+        if network.is_none() || busy {
+            continue;
+        }
+        match state.as_str() {
+            "loading" => load(weak.clone(), page.clone()).await,
+            "ready" => {
+                sync(weak.clone(), page.clone()).await;
+                runtime::sleep_ms(25_000).await;
+            }
+            _ => {}
+        }
+    }
+}
+
 async fn sync(weak: Weak<AppWindow>, page: Shared) {
     if let Some(app) = weak.upgrade() {
         app.set_wallet_busy(true);

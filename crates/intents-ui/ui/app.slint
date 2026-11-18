@@ -66,8 +66,10 @@ component Button inherits Pressable {
     min-width: label.preferred-width + 2 * Sp.l;
     border-radius: Rad.ctrl;
     opacity: root.enabled ? 1 : 0.4;
-    rest: root.primary ? Skin.accent : Skin.ink.with-alpha(0.10);
-    hover-fill: root.primary ? Skin.accent.mix(#FFFFFF, 0.92) : Skin.ink.with-alpha(0.16);
+    rest: root.primary ? Skin.accent : Skin.ink.with-alpha(0.14);
+    hover-fill: root.primary ? Skin.accent.mix(#FFFFFF, 0.92) : Skin.ink.with-alpha(0.22);
+    border-width: root.primary ? 0px : 1px;
+    border-color: Skin.ink.with-alpha(0.18);
     drop-shadow-offset-y: root.primary && root.enabled ? 2px : 0px;
     drop-shadow-blur: root.primary && root.enabled ? 8px : 0px;
     drop-shadow-color: Skin.accent.with-alpha(0.25);
@@ -938,6 +940,9 @@ export component AppWindow inherits Window {
     callback publish-offer();
     callback withdraw-offer(int);
     in property <string> other-leg-state;
+    // elastOS Wallet, for the top bar: "" outside Home; the short address once connected.
+    in property <bool> in-home;
+    in property <string> wallet-short;
     in property <string> other-leg;
     callback connect-wallet();
     changed give-amount => { root.amounts-changed(); }
@@ -1113,11 +1118,46 @@ export component AppWindow inherits Window {
                     preferred-width: 0px;
                     horizontal-stretch: 1;
                     overflow: elide;
-                    text: root.wide ? "Neptune Swap" : root.tabs[root.tab-of(root.page)].label;
+                    // The page's name, on a phone and a wide window alike (the window's width never
+                    // feeds back into what the title says).
+                    text: root.tabs[root.tab-of(root.page)].label;
                     color: Skin.ink;
-                    font-size: root.wide ? Ty.title : Ty.display;
+                    font-size: Ty.display;
                     font-weight: Ty.bold;
                     vertical-alignment: center;
+                }
+                // elastOS Wallet at a glance: connected (green, its address) or a clear button.
+                if root.in-home: VerticalLayout {
+                    alignment: center;
+                    wallet-chip := Rectangle {
+                        height: Ctl.s;
+                        width: wallet-row.preferred-width;
+                        border-radius: Rad.pill;
+                        background: root.wallet-short != "" ? Skin.good.with-alpha(0.16) : wallet-touch.has-hover ? Skin.accent.mix(#FFFFFF, 0.92) : Skin.accent;
+                        border-width: root.wallet-short != "" ? 1px : 0px;
+                        border-color: Skin.good.with-alpha(0.5);
+                        wallet-row := HorizontalLayout {
+                            padding-left: Sp.m;
+                            padding-right: Sp.m;
+                            spacing: Sp.s;
+                            if root.wallet-short != "": VerticalLayout {
+                                alignment: center;
+                                Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Skin.good; }
+                            }
+                            Text {
+                                text: root.wallet-short != "" ? "Wallet " + root.wallet-short : root.other-leg-state == "asking" ? "Approve in Wallet…" : "Connect Wallet";
+                                color: root.wallet-short != "" ? Skin.ink : Skin.on-accent;
+                                font-size: Ty.small;
+                                font-weight: Ty.strong;
+                                vertical-alignment: center;
+                            }
+                        }
+                        wallet-touch := TouchArea {
+                            enabled: root.wallet-short == "" && root.other-leg-state != "asking";
+                            mouse-cursor: self.enabled ? pointer : default;
+                            clicked => { root.connect-wallet(); }
+                        }
+                    }
                 }
                 VerticalLayout {
                     alignment: center;
@@ -1473,6 +1513,8 @@ export component AppWindow inherits Window {
                 vertical-stretch: 0;
                 radius: 0px;
                 floating: false;
+                // Light chrome over the wallpaper, not a dark band.
+                tint: Skin.frost-tint * 0.6;
                 HorizontalLayout {
                     padding-left: Sp.s;
                     padding-right: Sp.s;

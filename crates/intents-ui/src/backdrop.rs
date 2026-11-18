@@ -51,10 +51,12 @@ fn wallpaper(light: bool) -> Pixmap {
         glow(&mut pixmap, e * 0.95, e * 0.55, e * 0.70, 0x7FD6D0, 0.70);
         glow(&mut pixmap, e * 0.70, e * 0.95, e * 0.55, 0xF2C978, 0.55);
     } else {
-        pixmap.fill(rgba(0x070C1C, 1.0));
-        glow(&mut pixmap, e * 0.18, e * 0.08, e * 0.80, 0x2A4FD6, 0.85);
-        glow(&mut pixmap, e * 0.95, e * 0.55, e * 0.70, 0x0E8C99, 0.70);
-        glow(&mut pixmap, e * 0.65, e * 1.00, e * 0.60, 0xE7B85A, 0.40);
+        // A deep sea, never black: every corner keeps some light.
+        pixmap.fill(rgba(0x0C1636, 1.0));
+        glow(&mut pixmap, e * 0.18, e * 0.08, e * 0.85, 0x2E58E6, 0.85);
+        glow(&mut pixmap, e * 0.95, e * 0.55, e * 0.75, 0x10A2B0, 0.65);
+        glow(&mut pixmap, e * 0.05, e * 0.92, e * 0.70, 0x5B3FD0, 0.55);
+        glow(&mut pixmap, e * 0.65, e * 1.00, e * 0.60, 0xE7B85A, 0.35);
     }
 
     // The planet's rings: crisp on the wallpaper, gone to light under the glass.

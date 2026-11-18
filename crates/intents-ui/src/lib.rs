@@ -107,6 +107,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         app.on_refresh(move || spawn(load_status(weak.clone(), token.clone())));
     }
 
+    app.set_in_home(token.is_some());
     wallet_ui::wire(&app, token.clone());
     swap_ui::wire(&app, token.clone(), account.clone());
     offers_ui::wire(&app, token.clone());
@@ -225,6 +226,7 @@ async fn connect_wallet(weak: Weak<AppWindow>, account: Rc<RefCell<Option<evm_le
     };
     *account.borrow_mut() = Some(evm_leg::Account { id: id.to_string(), address });
     if let Some(app) = weak.upgrade() {
+        app.set_wallet_short(short_address(&evm_htlc::hex(&address)).into());
         app.set_other_leg_state("connected".into());
         show_other_leg(&app, account.borrow().as_ref());
     }

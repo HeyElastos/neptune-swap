@@ -233,9 +233,18 @@ impl Node for HttpNode {
                 eprintln!("neptune-provider: node request failed: {e}");
                 anyhow::anyhow!("The local Neptune node did not answer.")
             })?;
-        Ok(reply.into_string()?)
+        // A batch of blocks can exceed ureq's 10 MB `into_string` limit (blocks with many
+        // outputs); read it with a bound of our own instead.
+        use std::io::Read as _;
+        let mut text = String::new();
+        reply.into_reader().take(NODE_REPLY_MAX_BYTES + 1).read_to_string(&mut text)?;
+        anyhow::ensure!(text.len() as u64 <= NODE_REPLY_MAX_BYTES, "the node's reply is too large");
+        Ok(text)
     }
 }
+
+/// The largest node reply read: room for a full batch of large blocks, still bounded.
+const NODE_REPLY_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 pub struct Provider {
     networks: Vec<Network>,

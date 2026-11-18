@@ -41,6 +41,10 @@ struct Config {
     provider: ProviderConfig,
     evm: EvmConfig,
     offers: Vec<OfferTerms>,
+    /// Carrier node ids to join the topics with (optional): e.g. the node of the Home whose
+    /// apps should see this solver, when the two nodes do not discover each other.
+    #[serde(default)]
+    peers: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -109,8 +113,8 @@ fn main() -> Result<()> {
     println!("solver {me}\n  NPT {} · EVM {}", neptune.balance()?, evm_htlc::hex(&wallet.address));
 
     let carrier = Carrier::connect(&config.coords, "neptune-swap", &format!("solver-{}", &me[me.len() - 8..]), "Neptune Swap solver (test networks)", Duration::from_secs(280))?;
-    carrier.join(offers_topic)?;
-    carrier.join(deals_topic)?;
+    carrier.join_with(offers_topic, &config.peers)?;
+    carrier.join_with(deals_topic, &config.peers)?;
 
     let ids: Vec<String> = config.offers.iter().map(|_| hex16()).collect();
     let mut published = Instant::now() - Duration::from_secs(OFFER_SECS);

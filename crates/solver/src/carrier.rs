@@ -109,6 +109,17 @@ impl Carrier {
         Ok(reply.get("data").cloned().unwrap_or(Value::Null))
     }
 
+    /// Joins `topic`; joining twice on one node is fine. With `peers` (carrier node ids), the
+    /// topic is joined with exactly those nodes as its first neighbours: how a node reaches
+    /// another one that does not share its discovery (two local nodes, a test).
+    pub fn join_with(&self, topic: &str, peers: &[String]) -> Result<()> {
+        self.join(topic)?;
+        if !peers.is_empty() {
+            self.op("gossip_join_peers", json!({"topic": topic, "peers": peers}))?;
+        }
+        Ok(())
+    }
+
     /// Joins `topic`; joining twice on one node is fine.
     pub fn join(&self, topic: &str) -> Result<()> {
         match self.op("gossip_join", json!({"topic": topic})) {

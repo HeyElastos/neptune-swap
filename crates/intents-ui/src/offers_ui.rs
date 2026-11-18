@@ -37,8 +37,13 @@ struct Filled {
 #[derive(Default)]
 struct State {
     token: Option<String>,
-    /// Listening for offers: only once the user asks to see them.
+    /// Listening for offers (from the start, inside Home).
     listening: bool,
+    /// The user typed what they want by hand: the form stops following the best offer until
+    /// the pair changes.
+    manual: bool,
+    /// The pair the form showed last (give row, want row).
+    pair: (i32, i32),
     board: Board,
     /// The topic joined, and the network it belongs to.
     joined: Option<(String, Net)>,
@@ -106,7 +111,11 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
         });
     }
     if token.is_some() {
-        app.set_offers_status("Solvers' standing offers for this pair. Showing them joins the public offers topic on the carrier.".into());
+        // The market is read from the start: the form fills itself from the best offer.
+        state.borrow_mut().listening = true;
+        app.set_offers_on(true);
+        app.set_offers_status("Listening for offers on the carrier…".into());
+        spawn(listen(app.as_weak(), state.clone()));
         spawn(republish(app.as_weak(), state));
     } else {
         app.set_offers_status("Open Neptune Swap from Home to see offers.".into());
@@ -128,9 +137,12 @@ pub fn form_changed(app: &AppWindow) {
     let (Some(pay_i), Some(get_i)) = (crate::intent::row_of(&offer.want), crate::intent::row_of(&offer.give)) else { return };
     let same_pair = app.get_give_index() as usize == pay_i && app.get_want_index() as usize == get_i;
     if !same_pair || want_text != filled.want_text {
+        // Asked by hand: stop following offers (a new pair follows the market again).
+        s.manual = same_pair;
         s.filled = None;
         drop(s);
-        app.set_offers_status("The form no longer follows an offer.".into());
+        app.set_offers_status(if same_pair { "The form no longer follows an offer." } else { "Looking for the best offer for this pair…" }.into());
+        show(app, &state);
         return;
     }
     let paid = Amount::parse_decimal(&give_text, ASSETS[pay_i].decimals, ASSETS[pay_i].unit).ok();
@@ -265,6 +277,16 @@ fn show(app: &AppWindow, state: &Shared) {
         })
         .collect();
     s.shown = shown;
+    // A new pair follows the market again.
+    let pair = (app.get_give_index(), app.get_want_index());
+    if pair != s.pair {
+        s.pair = pair;
+        s.manual = false;
+    }
+    // Follow the best offer: none taken yet, or a better one than the one followed.
+    let best = s.shown.first().map(|l| (l.solver.clone(), l.offer.id.clone()));
+    let followed = s.filled.as_ref().map(|f| (f.listed.solver.clone(), f.listed.offer.id.clone()));
+    let auto_take = !s.manual && best.is_some() && best != followed;
     let following = s.filled.is_some();
     app.set_offers_pair(format!("{give} → {want}").into());
     if s.joined.is_some() && !following {
@@ -275,6 +297,10 @@ fn show(app: &AppWindow, state: &Shared) {
         });
     }
     app.set_offer_rows(ModelRc::new(VecModel::from(rows)));
+    drop(s);
+    if auto_take {
+        take(app, state, 0);
+    }
 }
 
 /// Fills the swap form from an offer: the user's side and the most the rate
