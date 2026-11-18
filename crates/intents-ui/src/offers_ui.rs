@@ -64,9 +64,6 @@ fn net_of(network_id: &str) -> (Net, &'static str) {
     }
 }
 
-fn def_index(symbol: &str) -> Option<usize> {
-    ASSETS.iter().position(|a| a.symbol == symbol)
-}
 
 /// `units` as the form's decimal text (rounded down to what it can hold).
 pub fn to_text(units: u128, d: &AssetDef) -> String {
@@ -128,7 +125,7 @@ pub fn form_changed(app: &AppWindow) {
         return;
     }
     let offer = filled.listed.offer.clone();
-    let (Some(pay_i), Some(get_i)) = (def_index(&offer.want.symbol), def_index(&offer.give.symbol)) else { return };
+    let (Some(pay_i), Some(get_i)) = (crate::intent::row_of(&offer.want), crate::intent::row_of(&offer.give)) else { return };
     let same_pair = app.get_give_index() as usize == pay_i && app.get_want_index() as usize == get_i;
     if !same_pair || want_text != filled.want_text {
         s.filled = None;
@@ -238,8 +235,8 @@ pub fn taken_offer(app: &AppWindow) -> Option<String> {
         let s = state.borrow();
         let filled = s.filled.as_ref()?;
         let o = &filled.listed.offer;
-        let same = def_index(&o.want.symbol) == Some(app.get_give_index() as usize)
-            && def_index(&o.give.symbol) == Some(app.get_want_index() as usize)
+        let same = crate::intent::row_of(&o.want) == Some(app.get_give_index() as usize)
+            && crate::intent::row_of(&o.give) == Some(app.get_want_index() as usize)
             && app.get_give_amount().trim() == filled.give_text
             && app.get_want_amount().trim() == filled.want_text
             && s.board.get(&filled.listed.solver, &o.id).is_some();
@@ -261,7 +258,10 @@ fn show(app: &AppWindow, state: &Shared) {
         .iter()
         .map(|l| {
             let (title, detail) = offers::describe(l, now);
-            AddressRow { title: title.into(), detail: detail.into(), current: false }
+            // A solver this Home finished swaps with stands out (bold) and says so.
+            let trusted = s.board.is_trusted(&l.solver);
+            let detail = if trusted { format!("Traded with before · {detail}") } else { detail };
+            AddressRow { title: title.into(), detail: detail.into(), current: trusted }
         })
         .collect();
     s.shown = shown;
@@ -290,7 +290,7 @@ fn take(app: &AppWindow, state: &Shared, row: usize) {
         return;
     }
     let o = &seen.offer;
-    let (Some(pay_i), Some(get_i)) = (def_index(&o.want.symbol), def_index(&o.give.symbol)) else { return };
+    let (Some(pay_i), Some(get_i)) = (crate::intent::row_of(&o.want), crate::intent::row_of(&o.give)) else { return };
     let (pay_def, get_def) = (&ASSETS[pay_i], &ASSETS[get_i]);
     let typed = Amount::parse_decimal(&app.get_give_amount(), pay_def.decimals, pay_def.unit).ok();
     // What the user pays, on the form's own steps (rounded up to one).

@@ -1,8 +1,21 @@
 diff --git a/capsules/wallet-provider/src/approval.rs b/capsules/wallet-provider/src/approval.rs
-index dfa639f8..92f711bd 100644
+index dfa639f8..e1973d5a 100644
 --- a/capsules/wallet-provider/src/approval.rs
 +++ b/capsules/wallet-provider/src/approval.rs
-@@ -882,8 +882,12 @@ impl WalletProvider {
+@@ -196,6 +196,12 @@ impl WalletProvider {
+             if let Err(err) = validate_eip155_transaction_intent_payload(&input.payload, &account) {
+                 return Response::error("invalid_transaction_intent", err);
+             }
++            // Local Neptune development fork: never show a request whose transaction is for
++            // another chain than the one it names (checked again at signing).
++            let named = input.chain_namespace.strip_prefix("eip155:").and_then(|id| id.parse::<u64>().ok());
++            if named.is_none() || named != input.payload.get("chain_id").and_then(|v| v.as_u64()) {
++                return Response::error("invalid_transaction_intent", "transaction chain id does not match the requested chain");
++            }
+         }
+         if input.intent == "browser_personal_sign" {
+             if let Err(err) = validate_browser_personal_sign_payload(&input.payload, &account) {
+@@ -882,8 +888,12 @@ impl WalletProvider {
                  "approved request requires an external wallet signature handoff",
              );
          }
@@ -16,7 +29,7 @@ index dfa639f8..92f711bd 100644
              || request.address != account.address
              || request.proof_type != account.proof_type
              || request.connector_id != account.connector_id
-@@ -908,6 +912,14 @@ impl WalletProvider {
+@@ -908,6 +918,14 @@ impl WalletProvider {
              {
                  return Response::error("invalid_transaction_intent", err);
              }
@@ -24,14 +37,14 @@ index dfa639f8..92f711bd 100644
 +            // eip155 chain, so the transaction's own chain id must be exactly the chain the
 +            // request names (the one the user reviewed).
 +            let named = request.chain_namespace.strip_prefix("eip155:").and_then(|id| id.parse::<u64>().ok());
-+            let signed_for = request.payload.get("chain_id").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
++            let signed_for = request.payload.get("chain_id").and_then(|v| v.as_u64());
 +            if named.is_none() || named != signed_for {
 +                return Response::error("invalid_transaction_intent", "transaction chain id does not match the requested chain");
 +            }
          }
          if request.intent == "bitcoin_bip322_proof" {
              if let Err(err) =
-@@ -1012,7 +1024,9 @@ fn validate_browser_account_access_payload(
+@@ -1012,7 +1030,9 @@ fn validate_browser_account_access_payload(
      if text("permission")? != "eth_accounts" {
          return Err("Browser account access permission must be eth_accounts".to_string());
      }

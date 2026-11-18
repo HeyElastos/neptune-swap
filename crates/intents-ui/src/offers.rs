@@ -135,16 +135,16 @@ fn def(symbol: &str) -> Option<&'static AssetDef> {
     ASSETS.iter().find(|a| a.symbol == symbol)
 }
 
-/// Coins in `units` of `symbol` (display only).
-pub fn coins(units: u128, symbol: &str) -> f64 {
-    let Some(d) = def(symbol) else { return 0.0 };
+/// Coins in `units` of `asset` (display only), by chain and symbol: two rows may share a symbol.
+pub fn coins(units: u128, asset: &Asset) -> f64 {
+    let Some(d) = crate::intent::row_of(asset).map(|i| &ASSETS[i]) else { return 0.0 };
     units as f64 / (d.unit as f64 * 10f64.powi(d.decimals as i32))
 }
 
 /// What the taker gets per coin it gives.
 fn user_rate(o: &Offer) -> f64 {
-    let give = coins(o.rate_give.units(), &o.give.symbol);
-    let want = coins(o.rate_want.units(), &o.want.symbol);
+    let give = coins(o.rate_give.units(), &o.give);
+    let want = coins(o.rate_want.units(), &o.want);
     if want > 0.0 { give / want } else { 0.0 }
 }
 
@@ -169,13 +169,13 @@ pub fn fmt(x: f64) -> String {
 
 /// The price of one NPT in the offer's other asset.
 pub fn npt_price(o: &Offer) -> (f64, &str) {
-    let (g, w) = (coins(o.rate_give.units(), &o.give.symbol), coins(o.rate_want.units(), &o.want.symbol));
+    let (g, w) = (coins(o.rate_give.units(), &o.give), coins(o.rate_want.units(), &o.want));
     if o.give.is_npt() { (w / g, &o.want.symbol) } else { (g / w, &o.give.symbol) }
 }
 
 /// The offer's limits in NPT.
 pub fn npt_limits(o: &Offer) -> (f64, f64) {
-    let (min, max) = (coins(o.min_give.units(), &o.give.symbol), coins(o.max_give.units(), &o.give.symbol));
+    let (min, max) = (coins(o.min_give.units(), &o.give), coins(o.max_give.units(), &o.give));
     if o.give.is_npt() {
         (min, max)
     } else {

@@ -203,7 +203,7 @@ pub async fn require_test_chain(namespace: &str, token: &str) -> Result<(), Stri
     if latest_block(namespace, token).await? < TEST_CHAIN_MAX_HEIGHT {
         Ok(())
     } else {
-        Err("Swaps run on local test chains only until an independent audit. This Base is a public chain: nothing was sent.".into())
+        Err("Swaps run on local test chains only until an independent audit. This chain is a public one: nothing was sent.".into())
     }
 }
 

@@ -39,6 +39,25 @@ is no owner who can change the rule (the program is fixed by its hash), no fee, 
 blacklist and no upgrade. Spending a holder's UTXO still needs its lock script (the holder's
 key); this rule governs amounts only.
 
+## How issuers must operate (not optional)
+
+The rule above is only as safe as the way issuers prove their part:
+- **Each issuer proves its own lock script, separately.** Neptune's stock proving flow
+  (`ProofCollection::produce`) proves every input's lock script from one witness that holds
+  every unlock key: following it would hand one builder every issuer's key for good. A mint
+  or burn is assembled instead: the kernel is fixed first, each issuer makes its own lock
+  script proof against that kernel's MAST hash, and the proofs are combined.
+- **No issuer proves a kernel it has not checked.** The kernel shows only commitments, so
+  each issuer first receives the transaction's salted inputs and outputs, recomputes their
+  addition and removal records against the kernel, and checks the exact amount minted or
+  burned and to whom. Without that, a coordinator could collect M approvals for any amount.
+- **Issuer locks are dedicated single-key locks,** used for nothing but minting and burning:
+  no refund, time-lock or shared path (any other path would let others act as that issuer),
+  never spent in transactions others build (a swap, a payment), where a builder could add a
+  mint. They are fixed in the program forever, so the keys are long-lived and well kept.
+- **Burns need the issuers too,** so holders redeem through them (an atomic swap of nUSDC
+  for USDC with an issuer, who then burns it).
+
 ## Supply and reserves
 
 Neptune hides amounts, so the chain cannot show the total supply by itself. Issuers publish

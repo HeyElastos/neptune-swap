@@ -28,6 +28,12 @@ pub const ASSETS: [AssetDef; 6] = [
     AssetDef { chain: Some(Chain::Bitcoin), symbol: "BTC", letter: "B", network: "Bitcoin", decimals: 8, unit: 1 },
 ];
 
+/// The form's row for an asset, by chain and symbol together: two rows may share a symbol
+/// (ELA on ESC and on the main chain) with different units.
+pub fn row_of(asset: &intents_protocol::Asset) -> Option<usize> {
+    ASSETS.iter().position(|a| a.chain == Some(asset.chain) && a.symbol == asset.symbol)
+}
+
 /// The form opens on "USDC for NPT".
 pub const DEFAULT_GIVE: usize = 3;
 pub const DEFAULT_WANT: usize = 0;

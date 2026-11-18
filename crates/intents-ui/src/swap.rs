@@ -687,21 +687,20 @@ impl Swap {
         !matches!(self.step, Step::Done | Step::Failed)
     }
 
-    fn label(symbol: &str, units: u128) -> String {
-        let def = crate::intent::ASSETS.iter().find(|a| a.symbol == symbol);
-        match def {
-            Some(d) => format!("{} {symbol}", crate::offers_ui::to_text(units, d)),
-            None => symbol.to_string(),
+    fn label(asset: &intents_protocol::Asset, units: u128) -> String {
+        match crate::intent::row_of(asset).map(|i| &crate::intent::ASSETS[i]) {
+            Some(d) => format!("{} {}", crate::offers_ui::to_text(units, d), asset.symbol),
+            None => asset.symbol.clone(),
         }
     }
 
     pub fn give_label(&self) -> String {
-        Self::label(&self.intent.body.give.symbol, self.intent.body.give_amount.units())
+        Self::label(&self.intent.body.give, self.intent.body.give_amount.units())
     }
 
     pub fn want_label(&self) -> String {
         let units = self.quoted_amount().unwrap_or(self.intent.body.min_want_amount.units());
-        Self::label(&self.intent.body.want.symbol, units)
+        Self::label(&self.intent.body.want, units)
     }
 }
 
