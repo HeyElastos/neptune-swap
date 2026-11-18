@@ -91,7 +91,12 @@ async fn send(weak: Weak<AppWindow>, state: Shared) {
         app.set_form_error(if ready { "Finish the swap in progress first.".to_string() } else { why }.into());
         return;
     }
-    let (Some(network), Some(solver), Some(token)) = (wallet_ui::network(&app), offers_ui::taken_offer(&app), token) else { return };
+    let Some(solver) = offers_ui::reviewed_solver(&app) else {
+        app.set_form_error("The offer or the amounts changed since the review: review the swap again.".into());
+        app.set_review_open(false);
+        return;
+    };
+    let (Some(network), Some(token)) = (wallet_ui::network(&app), token) else { return };
     let form = intent::Form {
         give: app.get_give_index() as usize,
         give_amount: &app.get_give_amount(),

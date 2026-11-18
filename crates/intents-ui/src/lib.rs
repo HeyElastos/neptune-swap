@@ -307,6 +307,7 @@ fn review(app: &AppWindow, prices: Option<&Value>) {
             app.set_sum_until(intent::TTL.get(form.ttl).map_or("10 minutes", |t| t.1).into());
             app.set_review_json(intent::pretty(&built).into());
             app.set_form_error(SharedString::new());
+            offers_ui::freeze(app);
             app.set_review_open(true);
         }
         Err(message) => app.set_form_error(message.into()),

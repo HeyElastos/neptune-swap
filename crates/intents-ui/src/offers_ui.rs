@@ -50,12 +50,43 @@ struct State {
     /// The rows shown, exactly as shown.
     shown: Vec<offers::Listed>,
     filled: Option<Filled>,
+    /// What the review sheet showed when it opened: Send goes out only while the form and the
+    /// offer are still exactly that.
+    reviewed: Option<Reviewed>,
     /// This Home's live offers.
     mine: Vec<Offer>,
     did: String,
 }
 
 type Shared = Rc<RefCell<State>>;
+
+#[derive(Clone, PartialEq, Eq)]
+struct Reviewed {
+    solver: String,
+    form: (i32, String, i32, String, i32),
+}
+
+fn snapshot(app: &AppWindow) -> Option<Reviewed> {
+    let form = (app.get_give_index(), app.get_give_amount().to_string(), app.get_want_index(), app.get_want_amount().to_string(), app.get_ttl_index());
+    Some(Reviewed { solver: taken_offer(app)?, form })
+}
+
+/// Called as the review sheet opens: fixes the solver and the form it shows.
+pub fn freeze(app: &AppWindow) {
+    let now = snapshot(app);
+    STATE.with(|s| {
+        if let Some(state) = s.borrow().as_ref() {
+            state.borrow_mut().reviewed = now;
+        }
+    });
+}
+
+/// The solver to send to: only while the form and the offer are exactly what was reviewed.
+pub fn reviewed_solver(app: &AppWindow) -> Option<String> {
+    let now = snapshot(app)?;
+    let same = STATE.with(|s| s.borrow().as_ref().is_some_and(|state| state.borrow().reviewed.as_ref() == Some(&now)));
+    same.then_some(now.solver)
+}
 
 thread_local! {
     static STATE: RefCell<Option<Shared>> = const { RefCell::new(None) };
@@ -87,7 +118,12 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
     STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
     {
         let (weak, state) = (app.as_weak(), state.clone());
-        app.on_take_offer(move |row| take(&weak.unwrap(), &state, row as usize));
+        // A row tapped by hand stays: the form stops following the best offer until the pair
+        // changes or "Find best offer" is pressed.
+        app.on_take_offer(move |row| {
+            state.borrow_mut().manual = true;
+            take(&weak.unwrap(), &state, row as usize, false);
+        });
     }
     {
         // Fetch the best offer now: read the topic, follow the market again, take the best.
@@ -316,7 +352,9 @@ fn show(app: &AppWindow, state: &Shared) {
     // Follow the best offer: none taken yet, or a better one than the one followed.
     let best = s.shown.first().map(|l| (l.solver.clone(), l.offer.id.clone()));
     let followed = s.filled.as_ref().map(|f| (f.listed.solver.clone(), f.listed.offer.id.clone()));
-    let auto_take = !s.manual && best.is_some() && best != followed;
+    // Never while the review sheet is open or a swap runs: what is sent must be what was shown.
+    let busy = app.get_review_open() || (app.get_swap_on() && !app.get_swap_finished());
+    let auto_take = !s.manual && !busy && best.is_some() && best != followed;
     let following = s.filled.is_some();
     app.set_offers_pair(format!("{give} → {want}").into());
     if s.joined.is_some() && !following {
@@ -329,13 +367,14 @@ fn show(app: &AppWindow, state: &Shared) {
     app.set_offer_rows(ModelRc::new(VecModel::from(rows)));
     drop(s);
     if auto_take {
-        take(app, state, 0);
+        take(app, state, 0, true);
     }
 }
 
 /// Fills the swap form from an offer: the user's side and the most the rate
-/// gives for the amount entered (or the offer's least, if that is outside).
-fn take(app: &AppWindow, state: &Shared, row: usize) {
+/// gives for the amount entered (or the offer's least, if none is entered or, when tapped by
+/// hand, it is outside). Filled `auto`matically, it never changes an amount the user typed.
+fn take(app: &AppWindow, state: &Shared, row: usize, auto: bool) {
     let mut s = state.borrow_mut();
     let Some(seen) = s.shown.get(row).cloned() else { return };
     // Exactly the offer the row showed, and only while it is still listed so.
@@ -351,6 +390,12 @@ fn take(app: &AppWindow, state: &Shared, row: usize) {
     let typed = Amount::parse_decimal(&app.get_give_amount(), pay_def.decimals, pay_def.unit).ok();
     // What the user pays, on the form's own steps (rounded up to one).
     let least = o.price_of(o.min_give).map(|p| Amount::new(p.units().div_ceil(pay_def.unit) * pay_def.unit));
+    let typed = typed.filter(|p| p.units() > 0);
+    if auto && typed.is_some_and(|p| o.amount_for(p).is_none()) {
+        drop(s);
+        app.set_offers_status("Your amount is outside the best offer's limits: tap the offer to use its least amount.".into());
+        return;
+    }
     let pay = typed.filter(|p| o.amount_for(*p).is_some()).or(least);
     let Some((pay, get)) = pay.and_then(|p| Some((p, o.amount_for(p)?))) else {
         drop(s);

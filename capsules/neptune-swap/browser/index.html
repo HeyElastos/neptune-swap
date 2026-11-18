@@ -7,12 +7,13 @@
 <style>
   /* The wallpaper's own colours, so no band ever shows where the canvas does not reach. */
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
-    background: #0c1636 radial-gradient(120% 80% at 5% 100%, #3a2a8a 0%, transparent 60%),
+    background: radial-gradient(120% 80% at 5% 100%, #3a2a8a 0%, transparent 60%),
                 radial-gradient(120% 90% at 95% 60%, #0b6f7c 0%, transparent 55%),
-                radial-gradient(120% 90% at 15% 0%, #2346b8 0%, #0c1636 70%); }
+                radial-gradient(120% 90% at 15% 0%, #2346b8 0%, #0c1636 70%) #0c1636; }
   @media (prefers-color-scheme: light) { html, body { background: #dce6f4; } }
   /* Slint's winit backend draws into this canvas; it fills the page. */
-  #canvas { display: block; position: fixed; inset: 0; width: 100% !important; height: 100% !important; outline: none; touch-action: none; }
+  #canvas { display: block; position: fixed; inset: 0; width: 100% !important; height: 100% !important;
+    max-width: none !important; max-height: none !important; outline: none; touch-action: none; }
 </style>
 </head>
 <body>

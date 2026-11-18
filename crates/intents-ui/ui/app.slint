@@ -899,6 +899,9 @@ export component AppWindow inherits Window {
     preferred-height: 760px;
     min-width: 320px;
     min-height: 520px;
+    // No upper bound: the page's canvas fills any window, however tall or wide.
+    max-width: 100000px;
+    max-height: 100000px;
     background: Skin.base;
     default-font-size: Ty.body;
 
@@ -1002,11 +1005,17 @@ export component AppWindow inherits Window {
         page == 0 ? 0 : page == 2 ? 1 : page == 3 ? 2 : 3
     }
     callback page-changed(int);
-    changed page => {
-        root.page-changed(self.page);
+    // A new page, or a new view on one (the wallet's, a swap starting), fades in.
+    function fade-in() {
         root.entering = true;
         enter-timer.running = true;
     }
+    changed page => {
+        root.page-changed(self.page);
+        root.fade-in();
+    }
+    changed wallet-state => { root.fade-in(); }
+    changed swap-on => { root.fade-in(); }
 
     // The wallet card (see WalletCard).
     in property <string> wallet-state: "loading";
@@ -1240,10 +1249,10 @@ export component AppWindow inherits Window {
                     states [
                         entering when root.entering: {
                             page-flick.opacity: 0;
-                            page.y: 14px;
+                            page.y: Motion.page-rise;
                             out {
-                                animate page-flick.opacity { duration: 260ms; easing: Motion.ease; }
-                                animate page.y { duration: 320ms; easing: Motion.ease; }
+                                animate page-flick.opacity { duration: Motion.page-in; easing: Motion.ease; }
+                                animate page.y { duration: Motion.page-in * 1.25; easing: Motion.ease; }
                             }
                         }
                     ]

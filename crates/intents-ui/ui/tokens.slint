@@ -71,7 +71,10 @@ export global Ctl {
 }
 
 export global Motion {
-    out property <duration> hover: 100ms;
+    out property <duration> hover: 160ms;
+    // A page or view fading in, rising this far.
+    out property <duration> page-in: 380ms;
+    out property <length> page-rise: 22px;
     out property <duration> overlay-in: 200ms;
     out property <duration> overlay-out: 180ms;
     out property <length> overlay-rise: 10px;
