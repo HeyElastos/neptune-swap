@@ -121,8 +121,9 @@ pub fn wire(app: &AppWindow, token: Option<String>) {
         // A row tapped by hand stays: the form stops following the best offer until the pair
         // changes or "Find best offer" is pressed.
         app.on_take_offer(move |row| {
-            state.borrow_mut().manual = true;
-            take(&weak.unwrap(), &state, row as usize, false);
+            if take(&weak.unwrap(), &state, row as usize, false) {
+                state.borrow_mut().manual = true;
+            }
         });
     }
     {
@@ -374,18 +375,18 @@ fn show(app: &AppWindow, state: &Shared) {
 /// Fills the swap form from an offer: the user's side and the most the rate
 /// gives for the amount entered (or the offer's least, if none is entered or, when tapped by
 /// hand, it is outside). Filled `auto`matically, it never changes an amount the user typed.
-fn take(app: &AppWindow, state: &Shared, row: usize, auto: bool) {
+fn take(app: &AppWindow, state: &Shared, row: usize, auto: bool) -> bool {
     let mut s = state.borrow_mut();
-    let Some(seen) = s.shown.get(row).cloned() else { return };
+    let Some(seen) = s.shown.get(row).cloned() else { return false };
     // Exactly the offer the row showed, and only while it is still listed so.
     let still = s.board.get(&seen.solver, &seen.offer.id).is_some_and(|now| Offer { expires_at: seen.offer.expires_at, ..now.offer.clone() } == seen.offer);
     if !still {
         drop(s);
         app.set_offers_status("That offer has ended.".into());
-        return;
+        return false;
     }
     let o = &seen.offer;
-    let (Some(pay_i), Some(get_i)) = (crate::intent::row_of(&o.want), crate::intent::row_of(&o.give)) else { return };
+    let (Some(pay_i), Some(get_i)) = (crate::intent::row_of(&o.want), crate::intent::row_of(&o.give)) else { return false };
     let (pay_def, get_def) = (&ASSETS[pay_i], &ASSETS[get_i]);
     let typed = Amount::parse_decimal(&app.get_give_amount(), pay_def.decimals, pay_def.unit).ok();
     // What the user pays, on the form's own steps (rounded up to one).
@@ -394,13 +395,13 @@ fn take(app: &AppWindow, state: &Shared, row: usize, auto: bool) {
     if auto && typed.is_some_and(|p| o.amount_for(p).is_none()) {
         drop(s);
         app.set_offers_status("Your amount is outside the best offer's limits: tap the offer to use its least amount.".into());
-        return;
+        return false;
     }
     let pay = typed.filter(|p| o.amount_for(*p).is_some()).or(least);
     let Some((pay, get)) = pay.and_then(|p| Some((p, o.amount_for(p)?))) else {
         drop(s);
         app.set_offers_status("This offer's limits are too narrow to fill from here.".into());
-        return;
+        return false;
     };
     let solver = offers::short_did(&seen.solver);
     let (give_text, want_text) = (to_text(pay.units(), pay_def), to_text(get.units(), get_def));
@@ -412,6 +413,7 @@ fn take(app: &AppWindow, state: &Shared, row: usize, auto: bool) {
     app.set_want_amount(want_text.into());
     app.set_form_error(SharedString::new());
     app.set_offers_status(format!("Filled from solver {solver}'s offer, at its rate.").into());
+    true
 }
 
 async fn load_identity(weak: Weak<AppWindow>, state: Shared) {
