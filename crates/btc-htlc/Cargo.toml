@@ -1,0 +1,13 @@
+[package]
+name = "btc-htlc"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "The Bitcoin half of a Neptune swap: a hashed timelock (P2WSH) script, its claim and refund"
+
+[dependencies]
+bitcoin = { version = "0.32", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# Bitcoin Core's own script verification: the tests run claims and refunds through it.
+bitcoin = { version = "0.32", default-features = false, features = ["std", "bitcoinconsensus", "rand-std"] }
