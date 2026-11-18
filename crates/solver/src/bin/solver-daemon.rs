@@ -78,6 +78,8 @@ const OFFER_SECS: u64 = 20 * 60;
 /// away ties up the solver's NPT until the timeout; this caps what that can cost).
 const QUOTES_PER_MINUTE: usize = 20;
 const OPEN_DEALS_MAX: usize = 20;
+/// How often to join the configured peers again.
+const PEERS_SECS: u64 = 45;
 const NPT_EXPOSURE_MAX: u128 = 50 * 4 * 10u128.pow(30);
 
 fn now_secs() -> u64 {
@@ -113,13 +115,23 @@ fn main() -> Result<()> {
     println!("solver {me}\n  NPT {} · EVM {}", neptune.balance()?, evm_htlc::hex(&wallet.address));
 
     let carrier = Carrier::connect(&config.coords, "neptune-swap", &format!("solver-{}", &me[me.len() - 8..]), "Neptune Swap solver (test networks)", Duration::from_secs(280))?;
-    carrier.join_with(offers_topic, &config.peers)?;
-    carrier.join_with(deals_topic, &config.peers)?;
+    carrier.join(offers_topic)?;
+    carrier.join(deals_topic)?;
 
     let ids: Vec<String> = config.offers.iter().map(|_| hex16()).collect();
     let mut published = Instant::now() - Duration::from_secs(OFFER_SECS);
+    let mut met = Instant::now() - Duration::from_secs(PEERS_SECS);
     let mut deals: HashMap<String, Deal> = HashMap::new();
     loop {
+        // A peer that joins a topic after us never hears our first join: ask again, often.
+        if !config.peers.is_empty() && met.elapsed() >= Duration::from_secs(PEERS_SECS) {
+            for topic in [offers_topic, deals_topic] {
+                if let Err(e) = carrier.join_with(topic, &config.peers) {
+                    eprintln!("joining the peers on {topic}: {e:#}");
+                }
+            }
+            met = Instant::now();
+        }
         if published.elapsed() >= Duration::from_secs(OFFER_SECS / 2) {
             for (terms, id) in config.offers.iter().zip(&ids) {
                 let offer = offer_of(terms, id);
@@ -135,14 +147,6 @@ fn main() -> Result<()> {
             }
             published = Instant::now();
             println!("offers published ({})", config.offers.len());
-            // A peer that joined a topic after us never heard our first join: ask again.
-            if !config.peers.is_empty() {
-                for topic in [offers_topic, deals_topic] {
-                    if let Err(e) = carrier.join_with(topic, &config.peers) {
-                        eprintln!("joining the peers on {topic}: {e:#}");
-                    }
-                }
-            }
         }
 
         for sealed in carrier.recv(deals_topic).unwrap_or_default() {
