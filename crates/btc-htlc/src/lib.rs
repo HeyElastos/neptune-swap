@@ -11,9 +11,15 @@
 //!
 //! Two ways to spend, nothing else: the receiver with a secret of exactly 32 bytes whose
 //! SHA-256 is the hash lock (the same secret and lock as the Neptune and EVM sides), or the
-//! sender from a block height on. `OP_SIZE 32` rules out the length trick where one chain
-//! accepts a longer preimage than the other. The refund counts in blocks (heights only, never
-//! times), so the protocol's Bitcoin margins (`Chain::Bitcoin`) are generous.
+//! sender once the chain is past a block height (a refund with `nLockTime = refund_height`
+//! can first be mined in block `refund_height + 1`). `OP_SIZE 32` rules out the length trick
+//! where one chain accepts a longer preimage than the other. The refund counts in blocks
+//! (heights only, never times).
+//!
+//! **The claim path never closes on chain.** After the refund height both paths are valid, so
+//! a claim broadcast late shows the secret while the sender can still refund. The receiver
+//! reveals only up to [`REVEAL_MARGIN_BLOCKS`] blocks before the refund height
+//! ([`may_reveal_at`]) and confirms deeply, counted in blocks, never in seconds.
 //!
 //! The claim's witness carries the secret, so a claim on Bitcoin reveals it, as on the EVM
 //! side: [`secret_from_witness`] reads it back. Signing here takes a key directly: tests and
@@ -30,6 +36,17 @@ use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::transaction::Version;
 use bitcoin::{Address, Amount, Network, OutPoint, PublicKey, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 
+/// Blocks before the refund height after which the receiver no longer reveals the secret:
+/// about three hours of Bitcoin blocks, so the claim confirms deeply before the refund opens.
+pub const REVEAL_MARGIN_BLOCKS: u32 = 18;
+/// The smallest output a claim or refund may leave (P2WSH dust); below it nothing is sent.
+pub const DUST: Amount = Amount::from_sat(330);
+
+/// Whether a claim may still be broadcast when the chain is at `tip_height`.
+pub fn may_reveal_at(htlc: &Htlc, tip_height: u32) -> bool {
+    tip_height.saturating_add(REVEAL_MARGIN_BLOCKS) <= htlc.refund_height
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Htlc {
     /// SHA-256 of the 32-byte secret.
@@ -42,14 +59,16 @@ pub struct Htlc {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// Keys must be compressed; heights below 500,000,000 (larger values mean times).
+    /// Keys must be compressed and different; heights below 500,000,000 (larger values mean times).
     BadTerms,
     WrongSecret,
+    /// The fee would leave less than dust (or more than half the value would go to fees).
+    BadFee,
 }
 
 impl Htlc {
     pub fn new(hash_lock: [u8; 32], receiver: PublicKey, sender: PublicKey, refund_height: u32) -> Result<Self, Error> {
-        if !receiver.compressed || !sender.compressed || refund_height == 0 || refund_height >= 500_000_000 {
+        if !receiver.compressed || !sender.compressed || receiver == sender || refund_height == 0 || refund_height >= 500_000_000 {
             return Err(Error::BadTerms);
         }
         Ok(Self { hash_lock, receiver, sender, refund_height })
@@ -89,14 +108,16 @@ pub fn hash_lock(secret: &[u8; 32]) -> [u8; 32] {
     sha256::Hash::hash(secret).to_byte_array()
 }
 
-/// One input spending the lock at `outpoint` (worth `value`) to `to`, less `fee`.
-fn spend(outpoint: OutPoint, value: Amount, to: ScriptBuf, fee: Amount, lock_time: LockTime, sequence: Sequence) -> Transaction {
-    Transaction {
+/// One input spending the lock at `outpoint` (worth `value`) to `to`, less `fee`. Refused when
+/// the fee would leave dust or take more than half the value: nothing goes to fees by accident.
+fn spend(outpoint: OutPoint, value: Amount, to: ScriptBuf, fee: Amount, lock_time: LockTime, sequence: Sequence) -> Result<Transaction, Error> {
+    let left = value.checked_sub(fee).filter(|left| *left >= DUST && fee <= value / 2).ok_or(Error::BadFee)?;
+    Ok(Transaction {
         version: Version::TWO,
         lock_time,
         input: vec![TxIn { previous_output: outpoint, script_sig: ScriptBuf::new(), sequence, witness: Witness::new() }],
-        output: vec![TxOut { value: value.checked_sub(fee).unwrap_or(Amount::ZERO), script_pubkey: to }],
-    }
+        output: vec![TxOut { value: left, script_pubkey: to }],
+    })
 }
 
 fn sign(tx: &Transaction, htlc: &Htlc, value: Amount, key: &SecretKey) -> Vec<u8> {
@@ -113,30 +134,33 @@ pub fn claim(htlc: &Htlc, outpoint: OutPoint, value: Amount, to: ScriptBuf, fee:
     if hash_lock(secret) != htlc.hash_lock {
         return Err(Error::WrongSecret);
     }
-    let mut tx = spend(outpoint, value, to, fee, LockTime::ZERO, Sequence::ENABLE_RBF_NO_LOCKTIME);
+    let mut tx = spend(outpoint, value, to, fee, LockTime::ZERO, Sequence::ENABLE_RBF_NO_LOCKTIME)?;
     let sig = sign(&tx, htlc, value, key);
     tx.input[0].witness = Witness::from_slice(&[sig, secret.to_vec(), vec![1], htlc.script().into_bytes()]);
     Ok(tx)
 }
 
-/// The sender's refund, valid from the refund height on (the transaction's lock time is that
-/// height; a non-final sequence makes the lock time count).
-pub fn refund(htlc: &Htlc, outpoint: OutPoint, value: Amount, to: ScriptBuf, fee: Amount, key: &SecretKey) -> Transaction {
+/// The sender's refund: its lock time is the refund height, so it can first be mined in block
+/// `refund_height + 1` (a non-final sequence makes the lock time count).
+pub fn refund(htlc: &Htlc, outpoint: OutPoint, value: Amount, to: ScriptBuf, fee: Amount, key: &SecretKey) -> Result<Transaction, Error> {
     let lock_time = LockTime::from_height(htlc.refund_height).expect("checked in new");
-    let mut tx = spend(outpoint, value, to, fee, lock_time, Sequence::ENABLE_RBF_NO_LOCKTIME);
+    let mut tx = spend(outpoint, value, to, fee, lock_time, Sequence::ENABLE_RBF_NO_LOCKTIME)?;
     let sig = sign(&tx, htlc, value, key);
     tx.input[0].witness = Witness::from_slice(&[sig, vec![], htlc.script().into_bytes()]);
-    tx
+    Ok(tx)
 }
 
 /// The secret a claim of this lock reveals, if `tx` is one: the 32-byte witness item that
-/// opens the hash lock, in an input whose witness script is this lock's.
+/// opens the hash lock, in an input whose witness script is this lock's. The branch flag is
+/// not checked: under segwit v0 any non-zero flag takes the claim path by consensus, and the
+/// hash check alone decides (no other transaction can yield a wrong secret). Watch the
+/// mempool as well as blocks: a reveal is public as soon as it is broadcast.
 pub fn secret_from_witness(tx: &Transaction, htlc: &Htlc) -> Option<[u8; 32]> {
     let script = htlc.script().into_bytes();
     tx.input.iter().find_map(|input| {
         let items: Vec<&[u8]> = input.witness.iter().collect();
         match items.as_slice() {
-            [_, secret, flag, witness_script] if *flag == [1] && *witness_script == script.as_slice() => {
+            [_, secret, _flag, witness_script] if *witness_script == script.as_slice() => {
                 let secret: [u8; 32] = (*secret).try_into().ok()?;
                 (hash_lock(&secret) == htlc.hash_lock).then_some(secret)
             }
@@ -199,7 +223,7 @@ mod tests {
         // A 33-byte "secret" whose hash we pretend matches: a lock built on it refuses at OP_SIZE.
         let long = [7u8; 33];
         let long_lock = Htlc { hash_lock: sha256::Hash::hash(&long).to_byte_array(), ..htlc.clone() };
-        let mut tx = spend(out, VALUE, to(), FEE, LockTime::ZERO, Sequence::ENABLE_RBF_NO_LOCKTIME);
+        let mut tx = spend(out, VALUE, to(), FEE, LockTime::ZERO, Sequence::ENABLE_RBF_NO_LOCKTIME).unwrap();
         let sig = sign(&tx, &long_lock, VALUE, &rk);
         tx.input[0].witness = Witness::from_slice(&[sig, long.to_vec(), vec![1], long_lock.script().into_bytes()]);
         assert!(!verify(&tx, &long_lock), "OP_SIZE 32 refuses a longer preimage");
@@ -208,24 +232,50 @@ mod tests {
     #[test]
     fn the_sender_refunds_only_from_the_height_on() {
         let (htlc, rk, sk, out) = setup();
-        let tx = refund(&htlc, out, VALUE, to(), FEE, &sk);
+        let tx = refund(&htlc, out, VALUE, to(), FEE, &sk).unwrap();
         assert!(verify(&tx, &htlc));
         assert_eq!(tx.lock_time, LockTime::from_height(800_000).unwrap());
         assert_eq!(secret_from_witness(&tx, &htlc), None, "a refund reveals nothing");
         // An earlier lock time is refused by CHECKLOCKTIMEVERIFY.
-        let mut early = refund(&htlc, out, VALUE, to(), FEE, &sk);
+        let mut early = refund(&htlc, out, VALUE, to(), FEE, &sk).unwrap();
         early.lock_time = LockTime::from_height(799_999).unwrap();
         let sig = sign(&early, &htlc, VALUE, &sk);
         early.input[0].witness = Witness::from_slice(&[sig, vec![], htlc.script().into_bytes()]);
         assert!(!verify(&early, &htlc));
         // A final sequence switches the lock time off: refused.
-        let mut fin = refund(&htlc, out, VALUE, to(), FEE, &sk);
+        let mut fin = refund(&htlc, out, VALUE, to(), FEE, &sk).unwrap();
         fin.input[0].sequence = Sequence::MAX;
         let sig = sign(&fin, &htlc, VALUE, &sk);
         fin.input[0].witness = Witness::from_slice(&[sig, vec![], htlc.script().into_bytes()]);
         assert!(!verify(&fin, &htlc));
         // The receiver cannot take the refund path.
-        assert!(!verify(&refund(&htlc, out, VALUE, to(), FEE, &rk), &htlc));
+        assert!(!verify(&refund(&htlc, out, VALUE, to(), FEE, &rk).unwrap(), &htlc));
+    }
+
+    #[test]
+    fn any_claim_flag_still_yields_the_secret_and_signatures_bind_the_amount() {
+        let (htlc, rk, _, out) = setup();
+        let mut tx = claim(&htlc, out, VALUE, to(), FEE, &SECRET, &rk).unwrap();
+        let items: Vec<Vec<u8>> = tx.input[0].witness.iter().map(|i| i.to_vec()).collect();
+        tx.input[0].witness = Witness::from_slice(&[items[0].clone(), items[1].clone(), vec![2], items[3].clone()]);
+        assert!(verify(&tx, &htlc), "any non-zero flag takes the claim path by consensus");
+        assert_eq!(secret_from_witness(&tx, &htlc), Some(SECRET), "and the secret is still read");
+        // A signature made for another amount does not verify.
+        let wrong_amount = claim(&htlc, out, VALUE + Amount::from_sat(1), to(), FEE, &SECRET, &rk).unwrap();
+        assert!(!verify(&wrong_amount, &htlc));
+    }
+
+    #[test]
+    fn fees_never_eat_the_lock_and_late_claims_are_not_made() {
+        let (htlc, rk, sk, out) = setup();
+        assert_eq!(claim(&htlc, out, VALUE, to(), VALUE, &SECRET, &rk), Err(Error::BadFee));
+        assert_eq!(claim(&htlc, out, VALUE, to(), VALUE - Amount::from_sat(100), &SECRET, &rk), Err(Error::BadFee), "dust left");
+        assert_eq!(refund(&htlc, out, VALUE, to(), Amount::from_sat(60_000), &sk), Err(Error::BadFee), "more than half to fees");
+        // The claim path stays valid on chain after the refund height (the race): so the
+        // receiver stops revealing 18 blocks before it.
+        assert!(may_reveal_at(&htlc, 800_000 - 18));
+        assert!(!may_reveal_at(&htlc, 800_000 - 17));
+        assert!(!may_reveal_at(&htlc, 900_000));
     }
 
     #[test]
@@ -236,6 +286,7 @@ mod tests {
         assert!(Htlc::new([0; 32], uncompressed, sender, 800_000).is_err());
         assert!(Htlc::new([0; 32], receiver, sender, 500_000_000).is_err(), "a time, not a height");
         assert!(Htlc::new([0; 32], receiver, sender, 0).is_err());
+        assert!(Htlc::new([0; 32], receiver, receiver, 800_000).is_err(), "two different parties");
         let htlc = Htlc::new([0xab; 32], receiver, sender, 800_000).unwrap();
         let asm = htlc.script().to_asm_string();
         assert!(asm.starts_with("OP_IF OP_SIZE OP_PUSHBYTES_1 20 OP_EQUALVERIFY OP_SHA256 OP_PUSHBYTES_32 abab"), "{asm}");

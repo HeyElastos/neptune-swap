@@ -30,8 +30,14 @@ shorter one, and the NPT giver reveals the secret by claiming it.
 | Last moment to reveal | 1 h before the other chain's refund | `claim_margin_secs`, `may_reveal` |
 
 - The Neptune refund time is read from the lock script itself, never from a message.
-- Bitcoin, when added, gets longer values (6 h least lock, 6 h gap, 3 h margin): its locks
-  count in blocks, and a refund can lag its target time.
+- Bitcoin (`crates/btc-htlc`) gets longer values (6 h least lock, 6 h gap, 3 h margin), and
+  its deadlines count in **blocks**: the claim path never closes on chain, so the receiver
+  stops revealing 18 blocks before the refund height and confirms deeply; fast blocks bring
+  the refund early in wall-clock time, slow blocks make it late. A refund with
+  `nLockTime = H` is first mined in block `H + 1`. The receiver waits for 3 to 6
+  confirmations of the funding and checks its output against the rebuilt script before
+  revealing; claims are fee-bumped (RBF) as the height nears; a reveal in the mempool is
+  already public.
 - Neptune's timelock uses the transaction kernel's timestamp; nodes admit it at most about
   60 s ahead of their clock, and a proven kernel's timestamp never goes down.
 
