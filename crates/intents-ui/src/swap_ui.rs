@@ -18,7 +18,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 use crate::evm_leg::{self, Account};
 use crate::swap::{Step, Swap, EVM_CONFIRMATIONS, NPT_SETTLED_DEPTH};
-use crate::{intent, offers_ui, runtime, wallet_ui, AppWindow, StepRow};
+use crate::{intent, offers_ui, runtime, wallet_ui, AddressRow, AppWindow, StepRow};
 
 /// How often swaps look for news while they wait.
 const POLL_MS: u32 = 5_000;
@@ -37,12 +37,14 @@ struct Ctx {
     running: bool,
     /// Why the journal could not be read or written, for the card.
     trouble: Option<String>,
+    /// Finished swaps kept in the journal, for the history in Activity.
+    history: Vec<Swap>,
 }
 
 type Shared = Rc<RefCell<Ctx>>;
 
 pub fn wire(app: &AppWindow, token: Option<String>, account: Rc<RefCell<Option<Account>>>) {
-    let state: Shared = Rc::new(RefCell::new(Ctx { token, account, swaps: vec![], running: false, trouble: None }));
+    let state: Shared = Rc::new(RefCell::new(Ctx { token, account, swaps: vec![], running: false, trouble: None, history: vec![] }));
     {
         let (weak, state) = (app.as_weak(), state.clone());
         app.on_send_swap(move || crate::spawn(send(weak.clone(), state.clone())));
@@ -52,7 +54,9 @@ pub fn wire(app: &AppWindow, token: Option<String>, account: Rc<RefCell<Option<A
         app.on_swap_dismiss(move || {
             let mut s = state.borrow_mut();
             if s.swaps.last().is_some_and(|w| !w.open_ended()) {
-                s.swaps.pop();
+                if let Some(done) = s.swaps.pop() {
+                    s.history.push(done);
+                }
             }
             drop(s);
             render(&weak.unwrap(), &state);
@@ -157,9 +161,6 @@ async fn resume(weak: Weak<AppWindow>, state: Shared) {
     let Some(app) = weak.upgrade() else { return };
     let (Some(network), Some(token)) = (wallet_ui::network(&app), state.borrow().token.clone()) else { return };
     drop(app);
-    if state.borrow().running {
-        return;
-    }
     let list = match runtime::provider("swap_list", &json!({ "network": network }), &token).await {
         Ok(list) => list,
         Err(e) => {
@@ -170,6 +171,7 @@ async fn resume(weak: Weak<AppWindow>, state: Shared) {
     let records = list["swaps"].as_object().cloned().unwrap_or_default();
     let mut unreadable = 0;
     let mut open: Vec<Swap> = vec![];
+    let mut finished: Vec<Swap> = vec![];
     for (_, record) in records {
         match serde_json::from_value::<Swap>(record) {
             Ok(swap) if swap.open_ended() => open.push(swap),
@@ -177,6 +179,7 @@ async fn resume(weak: Weak<AppWindow>, state: Shared) {
                 if completed(&swap) {
                     offers_ui::trust(&swap.solver);
                 }
+                finished.push(swap);
             }
             Err(_) => unreadable += 1,
         }
@@ -184,7 +187,11 @@ async fn resume(weak: Weak<AppWindow>, state: Shared) {
     if unreadable > 0 {
         state.borrow_mut().trouble = Some(format!("{unreadable} kept swap record(s) could not be read by this version of the app."));
     }
-    if open.is_empty() {
+    state.borrow_mut().history = finished;
+    if let Some(app) = weak.upgrade() {
+        render(&app, &state);
+    }
+    if open.is_empty() || state.borrow().running {
         return;
     }
     open.sort_by_key(|s| s.intent().expires_at);
@@ -669,8 +676,28 @@ fn steps(swap: &Swap) -> (Vec<&'static str>, usize) {
     }
 }
 
+/// Finished swaps, newest first, except the one the card shows.
+fn history_rows(s: &Ctx) -> Vec<AddressRow> {
+    let shown = s.swaps.last().map(|w| w.id.clone());
+    let mut done: Vec<&Swap> = s.history.iter().chain(s.swaps.iter().filter(|w| !w.open_ended())).filter(|w| Some(&w.id) != shown.as_ref()).collect();
+    done.sort_by_key(|w| std::cmp::Reverse(w.when()));
+    done.dedup_by(|a, b| a.id == b.id);
+    done.iter()
+        .map(|w| {
+            let status = if completed(w) { "Completed".to_string() } else { w.line.clone() };
+            let when = runtime::format_time(w.when().saturating_mul(1000));
+            AddressRow {
+                title: format!("{} → {}", w.give_label(), w.want_label()).into(),
+                detail: format!("{when} · {status}").into(),
+                current: completed(w),
+            }
+        })
+        .collect()
+}
+
 fn render(app: &AppWindow, state: &Shared) {
     let s = state.borrow();
+    app.set_swap_history(ModelRc::new(VecModel::from(history_rows(&s))));
     let Some(swap) = s.swaps.last() else {
         app.set_swap_on(false);
         return;

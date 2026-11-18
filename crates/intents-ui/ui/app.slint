@@ -394,6 +394,8 @@ export struct AddressRow {
 
 component AddressItem inherits Rectangle {
     in property <AddressRow> entry;
+    // Opens something when tapped (a chevron says so).
+    in property <bool> link: true;
     callback open();
     height: 46px;
     HorizontalLayout {
@@ -411,9 +413,9 @@ component AddressItem inherits Rectangle {
             }
             Text { text: root.entry.detail; color: Skin.muted; font-size: Ty.caption; overflow: elide; }
         }
-        Text { text: "›"; color: Skin.muted; font-size: Ty.title; vertical-alignment: center; }
+        if root.link: Text { text: "›"; color: Skin.muted; font-size: Ty.title; vertical-alignment: center; }
     }
-    TouchArea { mouse-cursor: pointer; clicked => { root.open(); } }
+    if root.link: TouchArea { mouse-cursor: pointer; clicked => { root.open(); } }
 }
 
 component ActivityItem inherits Rectangle {
@@ -967,6 +969,8 @@ export component AppWindow inherits Window {
     in property <string> send-note;
     callback send-swap();
     in property <bool> swap-on;
+    // Finished swaps, newest first (Activity).
+    in property <[AddressRow]> swap-history;
     in property <string> swap-title;
     in property <string> swap-line;
     in property <bool> swap-finished;
@@ -994,7 +998,8 @@ export component AppWindow inherits Window {
         }
     }
     // A wide window gets a side rail; a phone a tab bar at the bottom.
-    property <bool> wide: root.width >= 760px;
+    // Read from the global the window sets on a change, so the rail never feeds back into it.
+    property <bool> wide: Frost.width >= 760px;
     property <[{label: string, icon: string, page: int}]> tabs: [
         { label: "Swap", icon: Icons.swap, page: 0 },
         { label: "Market", icon: Icons.market, page: 2 },
@@ -1540,7 +1545,16 @@ export component AppWindow inherits Window {
                             dismiss => { root.swap-dismiss(); }
                         }
                     }
-                        if root.page == 3 && !root.swap-on: Glass {
+                        if root.page == 3 && root.swap-history.length > 0: Glass {
+                            height: history.preferred-height;
+                            history := VerticalLayout {
+                                padding: Sp.l;
+                                spacing: Sp.xs;
+                                Text { text: "History"; color: Skin.muted; font-size: Ty.caption; }
+                                for row in root.swap-history: AddressItem { entry: row; link: false; }
+                            }
+                        }
+                        if root.page == 3 && !root.swap-on && root.swap-history.length == 0: Glass {
                             height: empty.preferred-height;
                             empty := VerticalLayout {
                                 padding: Sp.xl;

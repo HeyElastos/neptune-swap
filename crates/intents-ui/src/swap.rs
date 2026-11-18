@@ -694,6 +694,11 @@ impl Swap {
         }
     }
 
+    /// When the swap was accepted (seconds), or, never accepted, when its intent ran out.
+    pub fn when(&self) -> u64 {
+        if self.accepted_at > 0 { self.accepted_at } else { self.intent.body.expires_at }
+    }
+
     pub fn give_label(&self) -> String {
         Self::label(&self.intent.body.give, self.intent.body.give_amount.units())
     }
