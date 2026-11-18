@@ -157,22 +157,26 @@ fn shot_and_quit(app: &AppWindow, path: String) {
 /// serve Ethereum main net).
 const WALLET_CHAIN: (&str, &str) = (evm_leg::BASE, "Base");
 
-/// What the form says about the side that is not NPT.
+/// What the form says about the side that is not NPT: its chain decides, not its symbol (ELA
+/// on ESC goes through Wallet; ELA on the main chain is still to come).
 fn show_other_leg(app: &AppWindow, account: Option<&evm_leg::Account>) {
-    let symbol = |i: i32| intent::ASSETS.get(i as usize).map_or("", |a| a.symbol);
-    let other = [symbol(app.get_give_index()), symbol(app.get_want_index())].into_iter().find(|s| *s != "NPT").unwrap_or("");
+    let def = |i: i32| intent::ASSETS.get(i as usize);
+    let other = [def(app.get_give_index()), def(app.get_want_index())].into_iter().flatten().find(|a| a.symbol != "NPT");
     let (state, text) = match (other, account) {
-        ("ETH" | "USDC", Some(account)) => (
-            "connected",
-            format!(
-                "{other} side: your elastOS Wallet account {} on {}. Wallet asks you to approve each payment, the way you set it up (passkey, MetaMask).",
-                short_address(&evm_htlc::hex(&account.address)),
-                WALLET_CHAIN.1
+        (Some(a), account) if a.chain.is_some_and(|c| evm_leg::namespace(c).is_some()) => match account {
+            Some(account) => (
+                "connected",
+                format!(
+                    "{} side: your elastOS Wallet account {} on {}. Wallet asks you to approve each payment, the way you set it up (passkey, MetaMask).",
+                    a.symbol,
+                    short_address(&evm_htlc::hex(&account.address)),
+                    a.network
+                ),
             ),
-        ),
-        ("ETH" | "USDC", None) => ("connect", format!("Connect elastOS Wallet for the {other} side ({})", WALLET_CHAIN.1)),
-        ("BTC", _) => ("info", "Bitcoin side: elastOS Wallet cannot send Bitcoin yet.".to_string()),
-        ("ELA", _) => ("info", "ELA on the Elastos main chain: coming, as a scriptless swap (no bridge, no ESC).".to_string()),
+            None => ("connect", format!("Connect elastOS Wallet for the {} side ({})", a.symbol, a.network)),
+        },
+        (Some(a), _) if a.symbol == "BTC" => ("info", "Bitcoin side: elastOS Wallet cannot send Bitcoin yet.".to_string()),
+        (Some(a), _) if a.symbol == "ELA" => ("info", "ELA on the Elastos main chain: coming, as a scriptless swap. ELA on ESC works now.".to_string()),
         _ => ("", String::new()),
     };
     if app.get_other_leg_state() != "asking" || state == "connected" {

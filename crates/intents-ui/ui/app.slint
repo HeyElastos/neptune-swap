@@ -494,7 +494,7 @@ component SolverCard inherits VerticalLayout {
     in property <string> note;
     in property <bool> busy;
     in property <[AddressRow]> mine;
-    property <[string]> others: ["USDC", "ETH", "BTC"];
+    property <[string]> others: ["USDC", "ETH", "ELA", "BTC"];
     callback publish();
     callback withdraw(int);
     padding: Sp.l;
@@ -1108,13 +1108,17 @@ export component AppWindow inherits Window {
                 padding-right: Sp.l;
                 spacing: Sp.m;
                 Text {
+                    // Its size never feeds back into the window's: the title elides instead.
+                    min-width: 0px;
+                    preferred-width: 0px;
+                    horizontal-stretch: 1;
+                    overflow: elide;
                     text: root.wide ? "Neptune Swap" : root.tabs[root.tab-of(root.page)].label;
                     color: Skin.ink;
                     font-size: root.wide ? Ty.title : Ty.display;
                     font-weight: Ty.bold;
                     vertical-alignment: center;
                 }
-                Rectangle { horizontal-stretch: 1; }
                 VerticalLayout {
                     alignment: center;
                     node-chip := Glass {
@@ -1501,8 +1505,8 @@ export component AppWindow inherits Window {
             // At most what fits below its anchor; longer lists scroll inside the popover, not the page.
             height: min(asset-list.preferred-height, root.height - root.pop-top - Sp.l);
             Flickable {
-                viewport-height: asset-list.preferred-height;
-                viewport-width: self.width;
+                content-height: asset-list.preferred-height;
+                content-width: self.width;
             asset-list := VerticalLayout {
                 width: parent.width;
                 padding: 6px;

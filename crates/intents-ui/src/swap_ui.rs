@@ -275,8 +275,14 @@ async fn run(weak: Weak<AppWindow>, state: Shared, network: String, token: Strin
             break;
         }
         let now = runtime::now_secs();
-        // Base's own clock, read once a pass: every Base deadline is checked against it.
-        let chain_now = evm_leg::chain_time(evm_leg::BASE, &token).await.ok();
+        // Each EVM chain's own clock, read once a pass: every deadline on that chain is
+        // checked against it (Base and ESC each have their own).
+        let mut clocks: Vec<(&'static str, Option<u64>)> = vec![];
+        for ns in [evm_leg::BASE, evm_leg::ESC] {
+            if swaps.iter().any(|s| s.open_ended() && namespace(s).ok() == Some(ns)) {
+                clocks.push((ns, evm_leg::chain_time(ns, &token).await.ok()));
+            }
+        }
         // One read of the deals topic for all swaps of each network kind.
         let mut mail: Vec<Vec<u8>> = vec![];
         for main_net in [false, true] {
@@ -293,6 +299,7 @@ async fn run(weak: Weak<AppWindow>, state: Shared, network: String, token: Strin
             }
             let before = swap.clone();
             swap.tick(now);
+            let chain_now = namespace(&swap).ok().and_then(|ns| clocks.iter().find(|(n, _)| *n == ns).and_then(|(_, t)| *t));
             if let Some(chain_now) = chain_now {
                 swap.tick_chain(chain_now, now);
             }

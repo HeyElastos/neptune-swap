@@ -20,10 +20,14 @@ use crate::runtime;
 /// The Wallet bridge's name for Base, the EVM chain elastOS Wallet pays on.
 pub const BASE: &str = "eip155:8453";
 
+/// The Wallet bridge's name for Elastos Smart Chain.
+pub const ESC: &str = "eip155:20";
+
 /// The bridge's chain namespace for `chain`, if Wallet can pay there.
 pub fn namespace(chain: Chain) -> Option<&'static str> {
     match chain {
         Chain::Base => Some(BASE),
+        Chain::Esc => Some(ESC),
         _ => None,
     }
 }

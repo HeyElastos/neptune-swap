@@ -1,5 +1,5 @@
 diff --git a/capsules/wallet-provider/src/approval.rs b/capsules/wallet-provider/src/approval.rs
-index dfa639f8..e9131814 100644
+index dfa639f8..92f711bd 100644
 --- a/capsules/wallet-provider/src/approval.rs
 +++ b/capsules/wallet-provider/src/approval.rs
 @@ -882,8 +882,12 @@ impl WalletProvider {
@@ -16,7 +16,22 @@ index dfa639f8..e9131814 100644
              || request.address != account.address
              || request.proof_type != account.proof_type
              || request.connector_id != account.connector_id
-@@ -1012,7 +1016,9 @@ fn validate_browser_account_access_payload(
+@@ -908,6 +912,14 @@ impl WalletProvider {
+             {
+                 return Response::error("invalid_transaction_intent", err);
+             }
++            // Local Neptune development fork: signing accepts an account made for another
++            // eip155 chain, so the transaction's own chain id must be exactly the chain the
++            // request names (the one the user reviewed).
++            let named = request.chain_namespace.strip_prefix("eip155:").and_then(|id| id.parse::<u64>().ok());
++            let signed_for = request.payload.get("chain_id").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
++            if named.is_none() || named != signed_for {
++                return Response::error("invalid_transaction_intent", "transaction chain id does not match the requested chain");
++            }
+         }
+         if request.intent == "bitcoin_bip322_proof" {
+             if let Err(err) =
+@@ -1012,7 +1024,9 @@ fn validate_browser_account_access_payload(
      if text("permission")? != "eth_accounts" {
          return Err("Browser account access permission must be eth_accounts".to_string());
      }

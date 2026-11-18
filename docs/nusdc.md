@@ -16,39 +16,51 @@ Neptune lock holding one nUSDC coin instead of one NPT coin.
 
 A Neptune UTXO holds an nUSDC coin when one of its coins carries nUSDC's type script hash.
 Consensus runs that type script on every transaction that spends or makes such a coin
-(it collects the type script hashes of all coins and requires a proof for each). The
-script enforces exactly this, and nothing else:
+(it collects the type script hashes of all coins, inputs and outputs, and requires a proof
+for each). The script enforces exactly this, and nothing else:
 
 1. **Coins are canonical.** A coin's state is one field element below 2^63: the amount in
    units of 10^-6 USDC. A UTXO holds at most one nUSDC coin.
-2. **Amounts are conserved, or a change is authorized and public.** With `in` the nUSDC the
-   transaction spends and `out` the nUSDC it makes:
-   - `out == in`: a transfer. Nothing else is needed, and nothing is announced.
-   - `out > in`: a **mint** of `out − in`. It needs secrets for M distinct issuer keys out of
-     the N fixed in the program (Neptune's own key form: a key is the Tip5 hash of a secret;
-     the secrets stay in the proof's private witness), and exactly one public announcement
-     `[tag, MINT, out − in]`.
-   - `out < in`: a **burn** of `in − out` (redemption). It needs exactly one public
-     announcement `[tag, BURN, in − out]`, and no keys.
-3. **Supply is public, transfers are not.** Mints and burns are announced, so anyone can add
-   up the supply and compare it with the USDC in the reserve. Transfers announce nothing.
+2. **The total is conserved, unless M issuers take part.** With `in` the nUSDC the
+   transaction spends and `out` the nUSDC it makes, summed as integers (never as field
+   elements: two coins already exceed the field's modulus):
+   - `out == in`: a transfer. Nothing else is needed.
+   - any other change, a mint or a burn: the transaction must **spend UTXOs locked by at
+     least M distinct issuer lock scripts** out of the N fixed in the program.
 
-There is no owner who can change the rule (the program is fixed by its hash), no fee, no
-pause, no blacklist and no upgrade. Spending a UTXO still needs its lock script (the owner's
+Issuers authorize by spending, not by sharing a secret: each issuer's own lock script is
+proved against this very transaction, by that issuer alone. No secret reaches whoever builds
+the proof, and an authorization cannot be reused (the issuer's UTXO is gone). M-of-N means
+M independent parties.
+
+There are no announcements: any transaction, even one with no nUSDC coin (where this script
+never runs), can carry any announcement, so announcements could not prove the supply. There
+is no owner who can change the rule (the program is fixed by its hash), no fee, no pause, no
+blacklist and no upgrade. Spending a holder's UTXO still needs its lock script (the holder's
 key); this rule governs amounts only.
+
+## Supply and reserves
+
+Neptune hides amounts, so the chain cannot show the total supply by itself. Issuers publish
+every mint and burn (amount and transaction), signed by M of them, and keep the reserve on
+Base in an audited multisig anyone can read. Redemption goes through the issuers: a holder
+swaps nUSDC to them for USDC with the atomic swap, and they burn it. This is the one trust
+point, made visible; a later version can mint against a STARK-verified proof of the deposit
+on Ethereum (a ZK light client) and remove it.
 
 ## Threat model
 
 | Attack | Why it fails |
 |---|---|
-| Mint without the issuers | `out > in` needs M distinct issuer secrets; a key counted twice, a wrong secret or an index out of range is refused. |
-| Mint more than announced, or hide a mint | The announcement must equal `out − in` exactly, and be the only nUSDC announcement. |
-| Inflate with a malformed coin | Every nUSDC coin, spent or made, must be one canonical amount below 2^63; two nUSDC coins in one UTXO are refused. |
-| Overflow a sum | Amounts stay below 2^63 per coin, so sums of a transaction's coins never reach the field modulus; the reference sums in 128 bits. |
+| Mint or burn without the issuers | Any change of the total needs M distinct issuer lock scripts among the spent UTXOs; one issuer twice, an issuer only in the outputs, or fewer than M is refused. |
+| Reuse an issuer's authorization | It is a spend of the issuer's UTXO in this transaction, proved by the issuer's own lock script against this kernel; the UTXO cannot be spent twice. |
+| Collect issuer secrets at the prover | There are none to collect: each issuer proves its own lock script. |
+| Inflate with a malformed coin | Every nUSDC coin, spent or made, must be one canonical amount below 2^63; two nUSDC coins in one UTXO are refused, even for issuers. |
+| Wrap a sum in the field | Sums are integers (128-bit, u32 limbs in the script); a test shows the wrap a field sum would allow (2^32 − 3 units in against two maximal coins out). |
 | Steal someone's nUSDC | Not this rule's job: spending needs the UTXO's lock script, as for NPT. |
 | Confuse with NPT or other tokens | Only coins with nUSDC's own type script hash count; other coins ride along untouched. |
-| An issuer key leaks | M-of-N: one leaked key cannot mint. Issuers rotate by issuing a new token (a new program, a new hash) and swapping holders over. |
-| Reserves missing | Not preventable on chain; made visible: the announced supply against the reserve on Base. Later: a ZK proof of Ethereum consensus in the mint rule removes the issuers from the trust path. |
+| An issuer key leaks | One leaked key is one of M. Issuers rotate by issuing a new token (a new program, a new hash) and swapping holders over. |
+| Reserves missing | Not preventable on chain; made visible by the issuers' signed mint and burn records against the reserve on Base. |
 
 ## Open questions for Neptune's developers
 
@@ -59,15 +71,18 @@ key); this rule governs amounts only.
   unknown type scripts?
 - Does the NativeCurrency type script accept transactions whose UTXOs also hold other coin
   types (it appears to count only its own)?
-- The best way for a type script to read the kernel's announcements (by the kernel's MAST
-  path, as the HTLC lock script reads the timestamp).
+- Stock wallets ignore UTXOs holding an unknown coin type (`all_type_script_states_are_valid`),
+  NPT in the same UTXO included; an nUSDC UTXO should hold nUSDC only, and this project's
+  wallet handles it.
+- ProofCollection-backed transactions show their type script hashes until upgraded to a
+  SingleProof: nUSDC use is visible on such a transaction before the upgrade.
 
 ## Next steps
 
 1. The type script in tasm, modelled on NativeCurrency's structure (read and check the
-   salted input and output UTXOs against the standard input, sum this coin, check the
-   authorization and announcement), held to `nusdc::check` by differential tests on
-   random and adversarial transactions.
+   salted input and output UTXOs against the standard input, sum this coin in u32 limbs,
+   find M distinct issuer lock script hashes among the inputs), held to `nusdc::check` by
+   differential tests on random and adversarial transactions.
 2. Wallet support (hold, send, receive nUSDC), and the HTLC lock holding one nUSDC coin.
 3. The reserve: an audited, existing multisig (not a new contract) on Base, so no new
    contract code is added there.

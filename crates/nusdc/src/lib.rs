@@ -3,63 +3,56 @@
 //! nUSDC is a coin type on Neptune, like NPT: a UTXO holds an nUSDC coin when one of its coins
 //! carries nUSDC's type script hash. Consensus runs that type script on every transaction that
 //! spends or makes such a coin, and the type script enforces exactly this rule (see
-//! docs/nusdc.md). The Triton VM program must agree with [`check`] on every input; tests hold
-//! it to that, as the HTLC lock script is held to its own Rust rule.
+//! docs/nusdc.md). The Triton VM program must agree with [`check`] on every input; tests will
+//! hold it to that, as the HTLC lock script is held to its own Rust rule.
 //!
 //! The rule, all of it:
 //! 1. Every nUSDC coin's state is one canonical amount in units of 10^-6 USDC: a single field
 //!    element below 2^63. A UTXO holds at most one nUSDC coin.
-//! 2. With `in` the nUSDC spent and `out` the nUSDC made by the transaction:
-//!    - `out == in`: an ordinary transfer, nothing else needed;
-//!    - `out > in`: a **mint** of `out - in`, only with the issuers' authorization (M distinct
-//!      keys of the N fixed in the program) and a public announcement saying exactly that;
-//!    - `out < in`: a **burn** of `in - out` (a redemption), only with a public announcement
-//!      saying exactly that.
-//! 3. Mints and burns are announced, so anyone can add up the supply and hold it against the
-//!    USDC the issuers keep in the reserve on Base. Transfers announce nothing.
+//! 2. With `in` the nUSDC spent and `out` the nUSDC made (both summed as integers, never in
+//!    the field): `out == in` is a transfer and needs nothing more. Any other change, a mint
+//!    or a burn, needs the transaction to **spend UTXOs locked by at least M distinct issuer
+//!    lock scripts** out of the N fixed in the program.
 //!
-//! What it leaves out on purpose: no owner can change the rule (the program is fixed by its
-//! hash), no fee, no pause, no blacklist, no upgrade. Spending a UTXO still needs its own lock
-//! script (the owner's key); this rule only governs amounts.
+//! Why issuers authorize by spending, not by a shared secret: each issuer's lock script is
+//! proved against this very transaction (its kernel), by that issuer alone, so no secret is
+//! ever handed to whoever builds the proof, and an authorization cannot be reused in another
+//! transaction (the issuer's UTXO is spent). M-of-N then really means M independent parties.
+//!
+//! What it leaves out on purpose: no announcements (anyone could forge one in a transaction
+//! that never runs this script, so they could not prove the supply), no owner who can change
+//! the rule (the program is fixed by its hash), no fee, no pause, no blacklist, no upgrade.
+//! Spending a holder's UTXO still needs that UTXO's own lock script; this rule governs amounts.
 
 #![forbid(unsafe_code)]
 
-use neptune_consensus::transaction::announcement::Announcement;
 use neptune_consensus::transaction::utxo::{Coin, Utxo};
-use tasm_lib::prelude::{Digest, Tip5};
+use tasm_lib::prelude::Digest;
 use tasm_lib::triton_vm::prelude::BFieldElement;
 
-/// The largest amount one coin may hold: below 2^63, so sums of a transaction's coins never
-/// reach the field's modulus (at most 2^63 per coin, and far fewer than 2^32 coins).
+/// The largest amount one coin may hold. Below 2^63, so every amount is one canonical field
+/// element. Sums of several coins do exceed the field's modulus (2^64 − 2^32 + 1), so they must
+/// be added as integers (128 bits here, u32 limbs in the type script), never as field elements.
 pub const MAX_AMOUNT: u64 = (1 << 63) - 1;
 
-/// The first word of an nUSDC announcement; the second says which: mint or burn.
-pub const ANNOUNCEMENT_TAG: u64 = 0x6e75_7364_63; // "nusdc"
-pub const MINT: u64 = 1;
-pub const BURN: u64 = 2;
-
-/// The issuers: the hashes of their keys (Tip5 of a secret, Neptune's own way of making a
-/// lock from a key) and how many must agree to mint. Fixed in the program, so in its hash.
+/// The issuers: the lock script hashes of their UTXOs, and how many must take part in a mint
+/// or burn. Fixed in the program, so in its hash.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Issuers {
-    pub keys: Vec<Digest>,
+    pub locks: Vec<Digest>,
     pub threshold: usize,
 }
 
 impl Issuers {
-    /// Sound terms: at least one key, no key twice, a threshold between 1 and the key count.
-    pub fn new(keys: Vec<Digest>, threshold: usize) -> Result<Self, Error> {
-        let distinct = keys.iter().enumerate().all(|(i, k)| !keys[..i].contains(k));
-        if keys.is_empty() || !distinct || threshold == 0 || threshold > keys.len() {
+    /// Sound terms: at least one lock, none twice, a threshold between 1 and the lock count.
+    pub fn new(locks: Vec<Digest>, threshold: usize) -> Result<Self, Error> {
+        let distinct = locks.iter().enumerate().all(|(i, l)| !locks[..i].contains(l));
+        if locks.is_empty() || !distinct || threshold == 0 || threshold > locks.len() {
             return Err(Error::BadIssuers);
         }
-        Ok(Self { keys, threshold })
+        Ok(Self { locks, threshold })
     }
 }
-
-/// A mint's authorization: secrets for distinct issuer keys, by index. It travels only in the
-/// type script's private witness (inside the proof), never on chain.
-pub type Authorization = [(usize, Digest)];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -68,12 +61,8 @@ pub enum Error {
     BadState,
     /// A UTXO holds more than one nUSDC coin.
     TwoCoins,
-    /// More nUSDC made than spent, without enough distinct, valid issuer keys.
+    /// The nUSDC total changed without M distinct issuers spending in the transaction.
     Unauthorized,
-    /// A mint or burn without exactly one announcement of exactly that amount.
-    NotAnnounced,
-    /// An nUSDC announcement on a transfer, or one that does not match.
-    StrayAnnouncement,
 }
 
 /// The nUSDC amount a UTXO holds (0 if none), checking the coin.
@@ -95,58 +84,23 @@ pub fn coin(own: Digest, amount: u64) -> Coin {
     Coin { type_script_hash: own, state: vec![BFieldElement::new(amount)] }
 }
 
-/// The announcement a mint or burn of `amount` carries.
-pub fn announcement(kind: u64, amount: u64) -> Announcement {
-    Announcement::new([ANNOUNCEMENT_TAG, kind, amount].map(BFieldElement::new).to_vec())
-}
-
-fn is_ours(a: &Announcement) -> bool {
-    a.message.first().map(|w| w.value()) == Some(ANNOUNCEMENT_TAG)
-}
-
-/// The rule. `own` is the type script's own hash (the program's digest), `inputs`/`outputs`
-/// the UTXOs the transaction spends and makes, `announcements` the kernel's public
-/// announcements, `authorization` the mint witness (empty unless minting).
-pub fn check(
-    own: Digest,
-    issuers: &Issuers,
-    inputs: &[Utxo],
-    outputs: &[Utxo],
-    announcements: &[Announcement],
-    authorization: &Authorization,
-) -> Result<(), Error> {
+/// The rule. `own` is the type script's own hash (the program's digest); `inputs` and
+/// `outputs` are the UTXOs the transaction spends and makes (the salted UTXOs the type script
+/// checks against its standard input).
+pub fn check(own: Digest, issuers: &Issuers, inputs: &[Utxo], outputs: &[Utxo]) -> Result<(), Error> {
     let sum = |utxos: &[Utxo]| -> Result<u128, Error> {
         utxos.iter().try_fold(0u128, |total, u| Ok(total + u128::from(amount_of(u, own)?)))
     };
-    let (spent, made) = (sum(inputs)?, sum(outputs)?);
-    let ours: Vec<&Announcement> = announcements.iter().filter(|a| is_ours(a)).collect();
-    let announced = |kind: u64, amount: u128| -> Result<(), Error> {
-        let expected = announcement(kind, u64::try_from(amount).map_err(|_| Error::NotAnnounced)?);
-        match ours.as_slice() {
-            [only] if **only == expected => Ok(()),
-            [] => Err(Error::NotAnnounced),
-            _ => Err(Error::StrayAnnouncement),
-        }
-    };
-    if made == spent {
-        return if ours.is_empty() { Ok(()) } else { Err(Error::StrayAnnouncement) };
+    if sum(inputs)? == sum(outputs)? {
+        return Ok(());
     }
-    if made < spent {
-        return announced(BURN, spent - made);
+    // A mint or a burn: M distinct issuers each spend a UTXO here.
+    let present = issuers.locks.iter().filter(|lock| inputs.iter().any(|u| u.lock_script_hash() == **lock)).count();
+    if present >= issuers.threshold {
+        Ok(())
+    } else {
+        Err(Error::Unauthorized)
     }
-    // A mint: M distinct issuer keys, each opened by its secret.
-    let mut used: Vec<usize> = vec![];
-    for &(index, secret) in authorization {
-        let Some(key) = issuers.keys.get(index) else { return Err(Error::Unauthorized) };
-        if used.contains(&index) || Tip5::hash(&secret) != *key {
-            return Err(Error::Unauthorized);
-        }
-        used.push(index);
-    }
-    if used.len() < issuers.threshold {
-        return Err(Error::Unauthorized);
-    }
-    announced(MINT, made - spent)
 }
 
 #[cfg(test)]
@@ -162,97 +116,82 @@ mod tests {
         d(42)
     }
 
-    fn secret(n: u64) -> Digest {
-        d(1000 + n)
-    }
+    const HOLDER: u64 = 7;
 
-    /// Three issuers, two must agree.
+    /// Three issuers (lock script hashes 100, 101, 102), two must take part.
     fn issuers() -> Issuers {
-        Issuers::new((0..3).map(|n| Tip5::hash(&secret(n))).collect(), 2).unwrap()
+        Issuers::new((100..103).map(d).collect(), 2).unwrap()
     }
 
     fn utxo(amount: u64) -> Utxo {
-        Utxo::new(d(7), vec![coin(own(), amount)])
+        Utxo::new(d(HOLDER), vec![coin(own(), amount)])
+    }
+
+    /// An issuer's UTXO (it holds some NPT; any coins will do).
+    fn issuer_utxo(n: u64) -> Utxo {
+        Utxo::new(d(100 + n), vec![Coin::new_native_currency(NativeCurrencyAmount::coins(1))])
     }
 
     #[test]
-    fn transfers_keep_the_total_and_announce_nothing() {
+    fn transfers_keep_the_total_and_need_no_issuer() {
         let ins = [utxo(70), utxo(30)];
-        assert_eq!(check(own(), &issuers(), &ins, &[utxo(99), utxo(1)], &[], &[]), Ok(()));
+        assert_eq!(check(own(), &issuers(), &ins, &[utxo(99), utxo(1)]), Ok(()));
         // Coins of other types (NPT) ride along and do not count.
         let npt = Coin::new_native_currency(NativeCurrencyAmount::coins(5));
-        let with_npt = Utxo::new(d(7), vec![coin(own(), 100), npt]);
-        assert_eq!(check(own(), &issuers(), &ins, &[with_npt], &[], &[]), Ok(()));
-        // Neither nUSDC in nor out: nothing to check.
-        assert_eq!(check(own(), &issuers(), &[], &[], &[], &[]), Ok(()));
-        // An nUSDC announcement on a plain transfer is refused.
-        assert_eq!(check(own(), &issuers(), &ins, &[utxo(100)], &[announcement(MINT, 0)], &[]), Err(Error::StrayAnnouncement));
+        let with_npt = Utxo::new(d(HOLDER), vec![coin(own(), 100), npt]);
+        assert_eq!(check(own(), &issuers(), &ins, &[with_npt]), Ok(()));
+        assert_eq!(check(own(), &issuers(), &[], &[]), Ok(()));
     }
 
     #[test]
-    fn minting_needs_the_threshold_of_distinct_valid_keys_and_an_exact_announcement() {
-        let out = [utxo(500)];
-        let mint = [announcement(MINT, 500)];
-        let ok = [(0, secret(0)), (2, secret(2))];
-        assert_eq!(check(own(), &issuers(), &[], &out, &mint, &ok), Ok(()));
-        // Minting on top of a transfer: only the difference is minted and announced.
-        assert_eq!(check(own(), &issuers(), &[utxo(100)], &out, &[announcement(MINT, 400)], &ok), Ok(()));
-        // Not enough keys, a key twice, a wrong secret, an index out of range: refused.
-        assert_eq!(check(own(), &issuers(), &[], &out, &mint, &[(0, secret(0))]), Err(Error::Unauthorized));
-        assert_eq!(check(own(), &issuers(), &[], &out, &mint, &[(0, secret(0)), (0, secret(0))]), Err(Error::Unauthorized));
-        assert_eq!(check(own(), &issuers(), &[], &out, &mint, &[(0, secret(0)), (1, secret(2))]), Err(Error::Unauthorized));
-        assert_eq!(check(own(), &issuers(), &[], &out, &mint, &[(0, secret(0)), (3, secret(3))]), Err(Error::Unauthorized));
-        assert_eq!(check(own(), &issuers(), &[], &out, &mint, &[]), Err(Error::Unauthorized));
-        // Authorized but not announced, announced wrong, or announced twice: refused.
-        assert_eq!(check(own(), &issuers(), &[], &out, &[], &ok), Err(Error::NotAnnounced));
-        assert_eq!(check(own(), &issuers(), &[], &out, &[announcement(MINT, 499)], &ok), Err(Error::StrayAnnouncement));
-        assert_eq!(check(own(), &issuers(), &[], &out, &[announcement(BURN, 500)], &ok), Err(Error::StrayAnnouncement));
-        assert_eq!(check(own(), &issuers(), &[], &out, &[mint[0].clone(), mint[0].clone()], &ok), Err(Error::StrayAnnouncement));
-        // Other announcements (not nUSDC's) are left alone.
-        let other = Announcement::new(vec![BFieldElement::new(1), BFieldElement::new(2)]);
-        assert_eq!(check(own(), &issuers(), &[], &out, &[other, mint[0].clone()], &ok), Ok(()));
-    }
-
-    #[test]
-    fn burning_needs_an_exact_announcement_and_no_keys() {
-        let ins = [utxo(300)];
-        assert_eq!(check(own(), &issuers(), &ins, &[utxo(100)], &[announcement(BURN, 200)], &[]), Ok(()));
-        assert_eq!(check(own(), &issuers(), &ins, &[], &[announcement(BURN, 300)], &[]), Ok(()));
-        assert_eq!(check(own(), &issuers(), &ins, &[utxo(100)], &[], &[]), Err(Error::NotAnnounced));
-        assert_eq!(check(own(), &issuers(), &ins, &[utxo(100)], &[announcement(BURN, 199)], &[]), Err(Error::StrayAnnouncement));
-        assert_eq!(check(own(), &issuers(), &ins, &[utxo(100)], &[announcement(MINT, 200)], &[]), Err(Error::StrayAnnouncement));
+    fn mints_and_burns_need_m_distinct_issuers_spending_in_the_transaction() {
+        let both = [issuer_utxo(0), issuer_utxo(2)];
+        assert_eq!(check(own(), &issuers(), &both, &[utxo(500)]), Ok(()), "a mint");
+        let burn_in = [utxo(300), issuer_utxo(1), issuer_utxo(2)];
+        assert_eq!(check(own(), &issuers(), &burn_in, &[utxo(100)]), Ok(()), "a burn");
+        // One issuer, the same issuer twice, an issuer only among the outputs, nobody: refused.
+        assert_eq!(check(own(), &issuers(), &[issuer_utxo(0)], &[utxo(500)]), Err(Error::Unauthorized));
+        assert_eq!(check(own(), &issuers(), &[issuer_utxo(0), issuer_utxo(0)], &[utxo(500)]), Err(Error::Unauthorized));
+        assert_eq!(check(own(), &issuers(), &[issuer_utxo(0)], &[utxo(500), issuer_utxo(1)]), Err(Error::Unauthorized));
+        assert_eq!(check(own(), &issuers(), &[], &[utxo(500)]), Err(Error::Unauthorized));
+        assert_eq!(check(own(), &issuers(), &[utxo(300)], &[utxo(100)]), Err(Error::Unauthorized), "a burn without issuers");
     }
 
     #[test]
     fn coins_must_be_canonical_and_one_per_utxo() {
-        let two = Utxo::new(d(7), vec![coin(own(), 1), coin(own(), 1)]);
-        assert_eq!(check(own(), &issuers(), &[utxo(2)], &[two], &[], &[]), Err(Error::TwoCoins));
-        let wide = Utxo::new(d(7), vec![Coin { type_script_hash: own(), state: vec![BFieldElement::new(1), BFieldElement::new(1)] }]);
-        assert_eq!(check(own(), &issuers(), &[utxo(1)], &[wide], &[], &[]), Err(Error::BadState));
-        let empty = Utxo::new(d(7), vec![Coin { type_script_hash: own(), state: vec![] }]);
-        assert_eq!(check(own(), &issuers(), &[], &[empty], &[], &[]), Err(Error::BadState));
-        let huge = Utxo::new(d(7), vec![Coin { type_script_hash: own(), state: vec![BFieldElement::new(1 << 63)] }]);
-        assert_eq!(check(own(), &issuers(), &[], &[huge], &[announcement(MINT, 1 << 63)], &[(0, secret(0)), (1, secret(1))]), Err(Error::BadState));
-        // A bad coin among the inputs is refused too (it cannot be spent as nUSDC).
-        let bad_in = Utxo::new(d(7), vec![Coin { type_script_hash: own(), state: vec![] }]);
-        assert_eq!(check(own(), &issuers(), &[bad_in], &[], &[], &[]), Err(Error::BadState));
+        let two = Utxo::new(d(HOLDER), vec![coin(own(), 1), coin(own(), 1)]);
+        assert_eq!(check(own(), &issuers(), &[utxo(2)], &[two]), Err(Error::TwoCoins));
+        let wide = Utxo::new(d(HOLDER), vec![Coin { type_script_hash: own(), state: vec![BFieldElement::new(1), BFieldElement::new(1)] }]);
+        assert_eq!(check(own(), &issuers(), &[utxo(1)], &[wide]), Err(Error::BadState));
+        let empty = Utxo::new(d(HOLDER), vec![Coin { type_script_hash: own(), state: vec![] }]);
+        assert_eq!(check(own(), &issuers(), &[], &[empty]), Err(Error::BadState));
+        let huge = Utxo::new(d(HOLDER), vec![Coin { type_script_hash: own(), state: vec![BFieldElement::new(1 << 63)] }]);
+        let both = [issuer_utxo(0), issuer_utxo(1)];
+        assert_eq!(check(own(), &issuers(), &both, &[huge]), Err(Error::BadState), "even issuers cannot make a malformed coin");
+        let bad_in = Utxo::new(d(HOLDER), vec![Coin { type_script_hash: own(), state: vec![] }]);
+        assert_eq!(check(own(), &issuers(), &[bad_in], &[]), Err(Error::BadState));
+    }
+
+    #[test]
+    fn sums_are_integers_never_field_elements() {
+        // Two coins of MAX_AMOUNT add up past the field's modulus p = 2^64 − 2^32 + 1. Summed in
+        // the field, 2^32 − 3 units in would "equal" two MAX_AMOUNT coins out: a mint without
+        // issuers. As integers they differ, so it needs issuers.
+        let p: u128 = (1u128 << 64) - (1u128 << 32) + 1;
+        let two_max = 2 * u128::from(MAX_AMOUNT);
+        let wrapped = (two_max % p) as u64;
+        assert_eq!(wrapped, (1u64 << 32) - 3);
+        assert_eq!(check(own(), &issuers(), &[utxo(wrapped)], &[utxo(MAX_AMOUNT), utxo(MAX_AMOUNT)]), Err(Error::Unauthorized));
+        let max = [utxo(MAX_AMOUNT), utxo(MAX_AMOUNT), utxo(MAX_AMOUNT)];
+        assert_eq!(check(own(), &issuers(), &max, &max), Ok(()));
     }
 
     #[test]
     fn issuer_terms_are_checked() {
-        let k = Tip5::hash(&secret(0));
         assert!(Issuers::new(vec![], 1).is_err());
-        assert!(Issuers::new(vec![k], 0).is_err());
-        assert!(Issuers::new(vec![k], 2).is_err());
-        assert!(Issuers::new(vec![k, k], 1).is_err(), "a key twice would let one secret count twice");
-        assert!(Issuers::new(vec![k], 1).is_ok());
-    }
-
-    #[test]
-    fn large_sums_never_wrap() {
-        let max = [utxo(MAX_AMOUNT), utxo(MAX_AMOUNT), utxo(MAX_AMOUNT)];
-        assert_eq!(check(own(), &issuers(), &max, &max, &[], &[]), Ok(()));
-        // A burn larger than one coin can hold is not announceable: refused, never wrapped.
-        assert_eq!(check(own(), &issuers(), &max, &[], &[announcement(BURN, MAX_AMOUNT)], &[]), Err(Error::NotAnnounced));
+        assert!(Issuers::new(vec![d(1)], 0).is_err());
+        assert!(Issuers::new(vec![d(1)], 2).is_err());
+        assert!(Issuers::new(vec![d(1), d(1)], 1).is_err(), "a lock twice would let one issuer count twice");
+        assert!(Issuers::new(vec![d(1)], 1).is_ok());
     }
 }
