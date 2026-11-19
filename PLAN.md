@@ -76,7 +76,30 @@ short; later, bonds.
 script, the EVM precompile and Solana all have SHA-256, so one hashlock works against
 all of them.
 
-## Resume here (2026-11-17, evening)
+## Resume here (2026-11-19)
+
+Done: the first full swap in the real app in the dev Home (1 NPT → 0.01 ETH, regtest + a local
+chain as Base): offer found automatically, quote over the carrier, NPT locked, ETH locked, the
+claim approved in Wallet, the solver's NPT claim. Fixed on the way: Send goes out only for
+exactly the reviewed offer and amounts; a tapped offer stays; the solver joins its peers every
+45 s (a peer that joins a topic later never hears an earlier join). Activity lists finished
+swaps. The clock, confirmation and one-swap-at-a-time items below are closed (swap-safety.md).
+
+Dev setup that worked: anvil with `evm_setIntervalMining 2`, the solver with `peers` = the
+gateway's carrier node id, the user's Wallet account funded on anvil for gas.
+
+Next, in this order:
+1. **BTC leg in the app**: Bitcoin signing through a wallet the user controls, a chain
+   watcher that is not one trusted server, RBF for claims; the script (`crates/btc-htlc`)
+   is done.
+2. **Provider vaults** (design below).
+3. **nUSDC type script** in tasm, held to `crates/nusdc` by differential tests.
+4. **ELA main chain** scriptless swap (P-256 in Triton VM).
+5. Faster swaps: risk-scaled confirmation depth, then Neptune channels.
+Open safety items: a Neptune fee that follows the network, fee bumps for Base claims, spam
+limits (proof of work or stake per offer), an encrypted seed on disk, a watchtower.
+
+## Earlier resume notes (2026-11-17, evening)
 
 Built: the swap in the app, both directions (engine `crates/intents-ui/src/swap.rs`, driver
 `swap_ui.rs`, swap card, Send to solver), the provider's swap operations (background
