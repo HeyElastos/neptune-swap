@@ -679,9 +679,16 @@ fn steps(swap: &Swap) -> (Vec<&'static str>, usize) {
 /// Finished swaps, newest first, except the one the card shows.
 fn history_rows(s: &Ctx) -> Vec<AddressRow> {
     let shown = s.swaps.last().map(|w| w.id.clone());
-    let mut done: Vec<&Swap> = s.history.iter().chain(s.swaps.iter().filter(|w| !w.open_ended())).filter(|w| Some(&w.id) != shown.as_ref()).collect();
+    // The live copy of a swap wins over an older one kept in the journal.
+    let mut seen = std::collections::HashSet::new();
+    let mut done: Vec<&Swap> = s
+        .swaps
+        .iter()
+        .filter(|w| !w.open_ended())
+        .chain(s.history.iter())
+        .filter(|w| Some(&w.id) != shown.as_ref() && seen.insert(w.id.clone()))
+        .collect();
     done.sort_by_key(|w| std::cmp::Reverse(w.when()));
-    done.dedup_by(|a, b| a.id == b.id);
     done.iter()
         .map(|w| {
             let status = if completed(w) { "Completed".to_string() } else { w.line.clone() };
