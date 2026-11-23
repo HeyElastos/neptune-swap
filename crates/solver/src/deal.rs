@@ -20,7 +20,7 @@ use evm_htlc::{decode_lock, hex, parse_address, parse_hex, parse_word, Address, 
 use evm_signer::{Node, Wallet};
 use intents_protocol::{
     asset_row, decode, may_reveal, other_refund_at, Accept, Amount, Chain, Decoded, EvmLocked, Intent, Message, Net, NptLocked, Offer, Quote,
-    Signed, EVM_CONFIRMATIONS, NEPTUNE_SETTLE_SECS, NPT_FEE, NPT_MIN_DEPTH, PROTOCOL_VERSION,
+    Signed, NEPTUNE_SETTLE_SECS, NPT_FEE, NPT_MIN_DEPTH, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -448,7 +448,7 @@ impl Deal {
         }
         let latest = c.evm.block_number()?;
         let first = *self.seen_at.get_or_insert(latest);
-        if latest.saturating_sub(first) < EVM_CONFIRMATIONS {
+        if latest.saturating_sub(first) < self.intent.body.other_chain().confirmations() {
             self.line = "the user's EVM lock is good; waiting for confirmations".into();
             return Ok(());
         }

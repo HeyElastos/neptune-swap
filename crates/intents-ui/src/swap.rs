@@ -19,7 +19,7 @@ use ed25519_dalek::SigningKey;
 use evm_htlc::{hex, parse_address, parse_word, Address, LockView, Word};
 use intents_protocol::{
     decode, may_reveal, other_refund_at, seal, Accept, Chain, Decoded, DidKey, EvmLocked, Intent, Message, Net, NptLocked, Quote, Signed,
-    EVM_CONFIRMATIONS, NPT_FEE, NPT_MIN_DEPTH, PROTOCOL_VERSION,
+    NPT_FEE, NPT_MIN_DEPTH, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -381,8 +381,9 @@ impl Swap {
             return Err(why);
         }
         self.evm_refund_after = Some(view.refund_after);
-        if confirmations < EVM_CONFIRMATIONS {
-            self.line = format!("The solver's lock is good; waiting for confirmations ({confirmations}/{EVM_CONFIRMATIONS}).");
+        let needed = self.other().confirmations();
+        if confirmations < needed {
+            self.line = format!("The solver's lock is good; waiting for confirmations ({confirmations}/{needed}).");
             return Ok(false);
         }
         self.step = Step::Claiming;
@@ -791,7 +792,7 @@ mod tests {
         assert!(swap.check_evm_lock(&view, 50, NOW).unwrap_err().contains("amount"));
         assert_eq!(swap.step, Step::CheckEvmLock, "a bad lock is never claimed");
         view.amount += 1;
-        assert_eq!(swap.check_evm_lock(&view, EVM_CONFIRMATIONS, NOW), Ok(true));
+        assert_eq!(swap.check_evm_lock(&view, Chain::Base.confirmations(), NOW), Ok(true));
         assert_eq!(swap.step, Step::Claiming);
         // Right before revealing, the lock is read again: spent or late means no claim.
         let spent = LockView { spent: true, ..view.clone() };

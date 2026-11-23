@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use intents_protocol::{EVM_CONFIRMATIONS, NPT_SETTLED_DEPTH};
+use intents_protocol::NPT_SETTLED_DEPTH;
 use serde_json::{json, Value};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
@@ -456,10 +456,11 @@ async fn step(
                     // Done once the claim is deep enough that no re-org can undo it.
                     let at = evm_leg::claimed_block(ns, &id, swap.evm_from_block(), token).await?.ok_or("Reading the claim's block; trying again.")?;
                     let depth = evm_leg::latest_block(ns, token).await?.saturating_sub(at) + 1;
-                    if depth >= EVM_CONFIRMATIONS {
+                    let needed = swap.intent().other_chain().confirmations();
+                    if depth >= needed {
                         swap.finish(format!("Swap complete: {} is in your Wallet account.", swap.want_label()));
                     } else {
-                        swap.line = format!("Claimed on Base; waiting for confirmations ({depth}/{EVM_CONFIRMATIONS}).");
+                        swap.line = format!("Claimed on Base; waiting for confirmations ({depth}/{needed}).");
                     }
                 } else if swap.claim_sent && !evm_leg::refunded(ns, &id, swap.evm_from_block(), token).await? {
                     // Our claim went out and the lock is spent, but no log yet: the logs lag.

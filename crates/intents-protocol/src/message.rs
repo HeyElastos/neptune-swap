@@ -54,6 +54,21 @@ impl Chain {
         }
     }
 
+    /// Blocks under a counterparty's lock on this EVM chain before the secret is revealed by
+    /// claiming it, and under a claim before the swap counts as done.
+    /// - Ethereum: its blocks take 64 to 95 slots to finalize (Buterin, "Paths toward
+    ///   single-slot finality", notes.ethereum.org/@vbuterin/single_slot_finality; D'Amato and
+    ///   Zanolini, IACR ePrint 2023/280). A slot holds at most one block, so 96 blocks are at
+    ///   least 96 slots. A depth, not a finality check: a chain that stops finalizing is not
+    ///   noticed.
+    /// - Base: 20, about 40 seconds, well past its re-org depth in practice.
+    pub fn confirmations(self) -> u64 {
+        match self {
+            Chain::Ethereum => 96,
+            _ => 20,
+        }
+    }
+
     /// Least time between this chain's refund and the Neptune refund: room for a reveal
     /// that lands as late as the chain allows, then a Neptune claim proved and mined.
     pub fn gap_secs(self) -> u64 {

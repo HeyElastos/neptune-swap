@@ -79,10 +79,6 @@ pub const NPT_MIN_DEPTH: u64 = 6;
 pub const NPT_FEE: &str = "0.05";
 /// Neptune blocks under a claim or refund before it counts as done.
 pub const NPT_SETTLED_DEPTH: u64 = 3;
-/// EVM blocks under a counterparty's lock before the secret is revealed by claiming it, and
-/// under a claim before the swap counts as done: about 40 seconds on Base, well past its
-/// re-org depth in practice.
-pub const EVM_CONFIRMATIONS: u64 = 20;
 
 /// No HTLC in a quote may lock funds longer than this.
 pub const MAX_LOCK_SECS: u64 = 48 * 3600;

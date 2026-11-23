@@ -346,3 +346,9 @@ fn a_decoded_message_is_kept_with_its_signer_as_text() {
     record["signer"] = json!("did:key:z6Mk");
     assert!(serde_json::from_value::<Decoded<Intent>>(record).is_err(), "not a did:key");
 }
+
+#[test]
+fn ethereum_waits_past_finality_and_base_twenty_blocks() {
+    assert!(Chain::Ethereum.confirmations() > 95, "past the 64 to 95 slots to finality");
+    assert_eq!(Chain::Base.confirmations(), 20);
+}

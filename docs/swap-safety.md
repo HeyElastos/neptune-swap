@@ -154,11 +154,12 @@ fuzz test checks that only the exact secret opens a lock and only before its tim
   as the contract itself reads it (`chainTime()`, read through the Wallet bridge), never the
   computer's. Neptune deadlines follow the computer's clock, which Neptune nodes hold
   transaction timestamps to.
-- **Confirmations from the lock's own block** (its `Locked` log), 20 Base blocks, before
-  revealing; and 20 blocks under the user's claim before the swap counts as done. A Neptune
-  claim or refund counts at 3 blocks. App and solver take these depths, and the 6 Neptune
-  blocks under a lock, from one place (`intents-protocol`: `NPT_MIN_DEPTH`,
-  `NPT_SETTLED_DEPTH`, `EVM_CONFIRMATIONS`); the depth does not grow with the amount yet.
+- **Confirmations from the lock's own block** (its `Locked` log), 20 Base blocks (96 on
+  Ethereum, past its 64 to 95 slots to finality), before revealing; and as many under the
+  user's claim before the swap counts as done. A Neptune claim or refund counts at 3 blocks.
+  App and solver take these depths, and the 6 Neptune blocks under a lock, from one place
+  (`intents-protocol`: `NPT_MIN_DEPTH`, `NPT_SETTLED_DEPTH`, `Chain::confirmations`); the
+  depth does not grow with the amount yet.
 - **One swap at a time.** The app starts no new swap while one is open, so one Wallet wait
   never holds up another swap's deadlines (older open swaps found in the journal run in
   order of their deadlines).
