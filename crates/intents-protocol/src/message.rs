@@ -58,8 +58,9 @@ impl Chain {
     /// that lands as late as the chain allows, then a Neptune claim proved and mined.
     pub fn gap_secs(self) -> u64 {
         match self {
-            // Height locks: the refund can lag its target time by slow blocks, and the
-            // claim branch stays open until the refund confirms.
+            // The refund opens on the median time past, about an hour behind the clock
+            // (more while blocks are slow), and the claim branch stays open until the
+            // refund confirms.
             Chain::Bitcoin => 6 * 3600,
             _ => 3 * 3600,
         }
