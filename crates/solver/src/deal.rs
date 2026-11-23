@@ -74,9 +74,11 @@ pub struct Deal {
     note: Option<Value>,
     from_height: u64,
     neptune_refund_ms: u64,
-    /// The EVM lock's id and the block from which it is watched.
+    /// The EVM lock's id; the block its logs are searched from (the solver's own lock: the
+    /// height before it went out); the block the user's lock was first seen at.
     evm_id: Option<Word>,
     evm_refund_after: u64,
+    evm_from_block: Option<u64>,
     seen_at: Option<u64>,
     /// When the Neptune claim or refund was submitted, and which (true: claim).
     submitted: Option<(u64, bool)>,
@@ -164,6 +166,7 @@ impl Deal {
             neptune_refund_ms: 0,
             evm_id: None,
             evm_refund_after: 0,
+            evm_from_block: None,
             seen_at: None,
             submitted: None,
             claim_sent: false,
@@ -293,6 +296,9 @@ impl Deal {
         let amount = self.quote.body.want_amount.units();
         let id = evm_htlc::lock_id(&c.wallet.address, &receiver, &token, amount, &hash_lock, refund_after);
         // Kept before the lock goes out: after a restart this step finds the lock by its id.
+        if self.evm_from_block.is_none() {
+            self.evm_from_block = Some(c.evm.block_number()?);
+        }
         self.save(c)?;
         if lock_view(c.evm, &id)?.sender == [0; 20] {
             if token == [0; 20] {
@@ -356,7 +362,7 @@ impl Deal {
         let id = self.evm_id.context("no EVM lock")?;
         let accept = self.accept()?.clone();
         let hash_lock = parse_word(accept.body.hash_lock.as_deref().context("hash lock")?).context("hash lock")?;
-        let logs = c.evm.logs(&HTLC_ADDRESS, &evm_htlc::keccak(b"Claimed(bytes32,bytes32)"), &id)?;
+        let logs = c.evm.logs(&HTLC_ADDRESS, &evm_htlc::keccak(b"Claimed(bytes32,bytes32)"), &id, self.evm_from_block.context("no EVM lock")?)?;
         if let Some(secret) = logs.iter().find_map(|l| evm_htlc::claimed_secret(&l.as_log(), &HTLC_ADDRESS, &id, &hash_lock)) {
             c.neptune.call(
                 "htlc_claim",
@@ -437,7 +443,7 @@ impl Deal {
             self.stage = Stage::AwaitEvm;
             return Ok(());
         }
-        let latest = quantity(&c.evm.call("eth_blockNumber", json!([]))?)?;
+        let latest = c.evm.block_number()?;
         let first = *self.seen_at.get_or_insert(latest);
         if latest.saturating_sub(first) < EVM_CONFIRMATIONS {
             self.line = "the user's EVM lock is good; waiting for confirmations".into();
@@ -458,10 +464,6 @@ impl Deal {
         self.line = "claimed on the EVM chain; the user claims the NPT next".into();
         Ok(())
     }
-}
-
-fn quantity(v: &Value) -> Result<u64> {
-    u64::from_str_radix(v.as_str().context("quantity")?.trim_start_matches("0x"), 16).context("quantity")
 }
 
 pub fn lock_view(evm: &Node, id: &Word) -> Result<LockView> {
@@ -549,6 +551,7 @@ mod tests {
             neptune_refund_ms: 1_900_000_000_000,
             evm_id: Some([9; 32]),
             evm_refund_after: 1_899_990_000,
+            evm_from_block: None,
             seen_at: None,
             submitted: Some((5, true)),
             claim_sent: false,

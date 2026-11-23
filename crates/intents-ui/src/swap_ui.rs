@@ -431,7 +431,7 @@ async fn step(
                 let id = swap.evm_id().ok_or("no Base lock")?;
                 let latest = evm_leg::latest_block(ns, token).await?;
                 // About two days of Base blocks back: a page closed for a long while still finds it.
-                swap.watch_from(latest.saturating_sub(evm_leg::LOG_PAGE * 45));
+                swap.watch_from(latest.saturating_sub(evm_htlc::LOG_PAGE * 45));
                 let view = evm_leg::lock_view(ns, &id, token).await?;
                 // Confirmations from the lock's own block, not from when this page saw it.
                 let locked_at = match swap.evm_lock_block {

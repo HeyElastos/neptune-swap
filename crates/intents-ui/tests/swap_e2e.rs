@@ -246,7 +246,7 @@ fn the_user_gives_eth_for_npt() -> Result<()> {
 
     // The user reads the secret from the Claimed log and claims its NPT.
     let id = swap.evm_id().unwrap();
-    let logs = w.evm.logs(&HTLC_ADDRESS, &evm_htlc::keccak(b"Claimed(bytes32,bytes32)"), &id)?;
+    let logs = w.evm.logs(&HTLC_ADDRESS, &evm_htlc::keccak(b"Claimed(bytes32,bytes32)"), &id, block)?;
     let hash_lock = swap.hash_lock().unwrap();
     let secret = logs.iter().find_map(|l| evm_htlc::claimed_secret(&l.as_log(), &HTLC_ADDRESS, &id, &hash_lock)).context("no secret")?;
     let mut request = swap.npt_claim_request(&secret).map_err(anyhow::Error::msg)?;

@@ -106,6 +106,10 @@ impl Node {
         quantity(&self.call("eth_getBalance", json!([hex(who), "latest"]))?)
     }
 
+    pub fn block_number(&self) -> Result<u64> {
+        quantity(&self.call("eth_blockNumber", json!([]))?).map(|n| n as u64)
+    }
+
     /// The latest block's timestamp (seconds): the clock HTLC refunds use.
     pub fn now(&self) -> Result<u64> {
         let block = self.call("eth_getBlockByNumber", json!(["latest", false]))?;
@@ -139,12 +143,18 @@ impl Node {
         bail!("no receipt for {hash}")
     }
 
-    /// Logs of `contract` with first topic `topic0` and second topic `topic1`.
-    pub fn logs(&self, contract: &Address, topic0: &Word, topic1: &Word) -> Result<Vec<LogEntry>> {
-        let filter = json!([{ "address": hex(contract), "fromBlock": "0x0", "toBlock": "latest",
-                              "topics": [hex(topic0), hex(topic1)] }]);
-        let logs = self.call("eth_getLogs", filter)?;
-        logs.as_array().context("logs")?.iter().map(LogEntry::from_json).collect()
+    /// Logs of `contract` with first topic `topic0` and second topic `topic1`, from block
+    /// `from` on, a page of blocks at a time: public RPCs cap the range.
+    pub fn logs(&self, contract: &Address, topic0: &Word, topic1: &Word, from: u64) -> Result<Vec<LogEntry>> {
+        let mut found = Vec::new();
+        for (start, end) in evm_htlc::log_pages(from, self.block_number()?) {
+            let filter = json!([{ "address": hex(contract), "fromBlock": format!("0x{start:x}"), "toBlock": format!("0x{end:x}"),
+                                  "topics": [hex(topic0), hex(topic1)] }]);
+            for log in self.call("eth_getLogs", filter)?.as_array().context("logs")? {
+                found.push(LogEntry::from_json(log)?);
+            }
+        }
+        Ok(found)
     }
 }
 

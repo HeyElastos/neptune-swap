@@ -68,6 +68,14 @@ pub fn keccak(bytes: &[u8]) -> Word {
     Keccak256::digest(bytes).into()
 }
 
+/// Blocks per `eth_getLogs` call: public RPCs cap the range.
+pub const LOG_PAGE: u64 = 2_000;
+
+/// The block ranges from `from` to `latest`, `LOG_PAGE` at a time.
+pub fn log_pages(from: u64, latest: u64) -> Vec<(u64, u64)> {
+    (from..=latest).step_by(LOG_PAGE as usize).map(|start| (start, latest.min(start + LOG_PAGE - 1))).collect()
+}
+
 fn selector(signature: &str) -> [u8; 4] {
     keccak(signature.as_bytes())[..4].try_into().unwrap()
 }
@@ -334,6 +342,13 @@ mod tests {
             let end = json[start..].find('"').unwrap() + start;
             assert_eq!(parse_hex(&json[start..end]).unwrap(), init, "rebuild changed the creation code: update the pins");
         }
+    }
+
+    #[test]
+    fn logs_are_read_in_pages() {
+        assert_eq!(log_pages(10, 10), vec![(10, 10)]);
+        assert_eq!(log_pages(0, 4_500), vec![(0, 1_999), (2_000, 3_999), (4_000, 4_500)]);
+        assert!(log_pages(5, 4).is_empty());
     }
 
     #[test]

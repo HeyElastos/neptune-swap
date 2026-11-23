@@ -11,7 +11,7 @@
 // the Wallet connection uses this module.
 #![allow(dead_code)]
 
-use evm_htlc::{decode_lock, hex, parse_address, parse_hex, parse_word, Address, LockView, Word, HTLC_ADDRESS};
+use evm_htlc::{decode_lock, hex, log_pages, parse_address, parse_hex, parse_word, Address, LockView, Word, HTLC_ADDRESS};
 use intents_protocol::{asset_row, may_reveal, Chain};
 use serde_json::{json, Value};
 
@@ -222,76 +222,50 @@ pub async fn chain_time(namespace: &str, token: &str) -> Result<u64, String> {
     ret.as_str().and_then(parse_hex).as_deref().and_then(evm_htlc::decode_chain_time).ok_or("Chain read: no chain time".into())
 }
 
-/// The block the lock `id` was made in (its `Locked` log), searched from `from_block`.
-pub async fn locked_block(namespace: &str, id: &Word, from_block: u64, token: &str) -> Result<Option<u64>, String> {
-    let latest = latest_block(namespace, token).await?;
-    let topic = hex(&evm_htlc::keccak(b"Locked(bytes32,address,address,address,uint256,bytes32,uint64)"));
-    for (start, end) in log_pages(from_block, latest) {
-        let filter = json!({ "address": hex(&HTLC_ADDRESS), "topics": [topic, hex(id)], "fromBlock": format!("0x{start:x}"), "toBlock": format!("0x{end:x}") });
-        let logs = read(namespace, "eth_getLogs", json!([filter]), token).await?;
-        if let Some(block) = logs.as_array().and_then(|l| l.first()).and_then(|l| quantity(&l["blockNumber"])) {
-            return Ok(Some(block));
-        }
-    }
-    Ok(None)
-}
-
-/// The block the `Claimed` log of `id` is in, if claimed.
-pub async fn claimed_block(namespace: &str, id: &Word, from_block: u64, token: &str) -> Result<Option<u64>, String> {
-    let latest = latest_block(namespace, token).await?;
-    let topic = hex(&evm_htlc::keccak(b"Claimed(bytes32,bytes32)"));
-    for (start, end) in log_pages(from_block, latest) {
-        let filter = json!({ "address": hex(&HTLC_ADDRESS), "topics": [topic, hex(id)], "fromBlock": format!("0x{start:x}"), "toBlock": format!("0x{end:x}") });
-        let logs = read(namespace, "eth_getLogs", json!([filter]), token).await?;
-        if let Some(block) = logs.as_array().and_then(|l| l.first()).and_then(|l| quantity(&l["blockNumber"])) {
-            return Ok(Some(block));
-        }
-    }
-    Ok(None)
-}
-
 /// A lock as the swap contract holds it.
 pub async fn lock_view(namespace: &str, id: &Word, token: &str) -> Result<LockView, String> {
     let ret = read(namespace, "eth_call", json!([{ "to": hex(&HTLC_ADDRESS), "data": hex(&evm_htlc::locks(id)) }, "latest"]), token).await?;
     ret.as_str().and_then(parse_hex).as_deref().and_then(decode_lock).ok_or("The contract gave no lock.".into())
 }
 
-/// Blocks per `eth_getLogs` call: public RPCs cap the range.
-pub const LOG_PAGE: u64 = 2_000;
-
-/// The block ranges from `from` to `latest`, `LOG_PAGE` at a time.
-pub fn log_pages(from: u64, latest: u64) -> Vec<(u64, u64)> {
-    (from..=latest).step_by(LOG_PAGE as usize).map(|start| (start, latest.min(start + LOG_PAGE - 1))).collect()
-}
-
-/// The secret a claim of `id` published, if it has been claimed: searched from `from_block`
-/// (the block of the user's own lock, from its receipt), page by page. The caller keeps
-/// asking until its Neptune claim deadline.
-pub async fn claimed_secret(namespace: &str, id: &Word, hash_lock: &Word, from_block: u64, token: &str) -> Result<Option<Word>, String> {
+/// What `pick` finds in the swap contract's `event` logs for `id`, searched from `from_block`
+/// (the block of the lock, or before it) page by page.
+async fn find_log<T>(namespace: &str, event: &[u8], id: &Word, from_block: u64, token: &str, pick: impl Fn(&Value) -> Option<T>) -> Result<Option<T>, String> {
     let latest = latest_block(namespace, token).await?;
-    let topic = hex(&evm_htlc::keccak(b"Claimed(bytes32,bytes32)"));
+    let topic = hex(&evm_htlc::keccak(event));
     for (start, end) in log_pages(from_block, latest) {
         let filter = json!({ "address": hex(&HTLC_ADDRESS), "topics": [topic, hex(id)], "fromBlock": format!("0x{start:x}"), "toBlock": format!("0x{end:x}") });
-        let logs = read(namespace, "eth_getLogs", json!([filter]), token).await?;
-        if let Some(secret) = secret_from_logs(&logs, &HTLC_ADDRESS, id, hash_lock) {
-            return Ok(Some(secret));
+        if let Some(found) = pick(&read(namespace, "eth_getLogs", json!([filter]), token).await?) {
+            return Ok(Some(found));
         }
     }
     Ok(None)
 }
 
-/// Whether a `Refunded` log for `id` exists from `from_block` on.
+/// The block of the first log in `logs`.
+fn first_block(logs: &Value) -> Option<u64> {
+    quantity(&logs.as_array()?.first()?["blockNumber"])
+}
+
+/// The block the lock `id` was made in (its `Locked` log).
+pub async fn locked_block(namespace: &str, id: &Word, from_block: u64, token: &str) -> Result<Option<u64>, String> {
+    find_log(namespace, b"Locked(bytes32,address,address,address,uint256,bytes32,uint64)", id, from_block, token, first_block).await
+}
+
+/// The block the `Claimed` log of `id` is in, if claimed.
+pub async fn claimed_block(namespace: &str, id: &Word, from_block: u64, token: &str) -> Result<Option<u64>, String> {
+    find_log(namespace, b"Claimed(bytes32,bytes32)", id, from_block, token, first_block).await
+}
+
+/// The secret a claim of `id` published, if it has been claimed. The caller keeps asking
+/// until its Neptune claim deadline.
+pub async fn claimed_secret(namespace: &str, id: &Word, hash_lock: &Word, from_block: u64, token: &str) -> Result<Option<Word>, String> {
+    find_log(namespace, b"Claimed(bytes32,bytes32)", id, from_block, token, |logs| secret_from_logs(logs, &HTLC_ADDRESS, id, hash_lock)).await
+}
+
+/// Whether a `Refunded` log for `id` exists.
 pub async fn refunded(namespace: &str, id: &Word, from_block: u64, token: &str) -> Result<bool, String> {
-    let latest = latest_block(namespace, token).await?;
-    let topic = hex(&evm_htlc::keccak(b"Refunded(bytes32)"));
-    for (start, end) in log_pages(from_block, latest) {
-        let filter = json!({ "address": hex(&HTLC_ADDRESS), "topics": [topic, hex(id)], "fromBlock": format!("0x{start:x}"), "toBlock": format!("0x{end:x}") });
-        let logs = read(namespace, "eth_getLogs", json!([filter]), token).await?;
-        if logs.as_array().is_some_and(|l| !l.is_empty()) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(find_log(namespace, b"Refunded(bytes32)", id, from_block, token, |logs| logs.as_array().filter(|l| !l.is_empty()).map(|_| ())).await?.is_some())
 }
 
 /// Sends `tx` from `account`: Wallet shows it and the user approves, then it is broadcast
@@ -409,15 +383,12 @@ mod tests {
     }
 
     #[test]
-    fn only_the_swap_contract_is_accepted_and_logs_are_read_in_pages() {
+    fn only_the_swap_contract_is_accepted() {
         assert_eq!(check_named_contract("5dc5930dab83329a3dd8e85ee1de7e8306d6b260"), Ok(()));
         assert!(check_named_contract("0xcccccccccccccccccccccccccccccccccccccccc").is_err());
         assert!(check_named_contract("nonsense").is_err());
         assert_eq!(claim_tx(&[1; 32], &[2; 32], "x").to, HTLC_ADDRESS);
         assert_eq!(refund_tx(&[1; 32], "x").to, HTLC_ADDRESS);
-        assert_eq!(log_pages(10, 10), vec![(10, 10)]);
-        assert_eq!(log_pages(0, 4_500), vec![(0, 1_999), (2_000, 3_999), (4_000, 4_500)]);
-        assert!(log_pages(5, 4).is_empty());
     }
 
     #[test]

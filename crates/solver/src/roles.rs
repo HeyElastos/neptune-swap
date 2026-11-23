@@ -292,7 +292,7 @@ impl Solver {
             self.eth_lock.context("no ETH lock")?,
         );
         let hash_lock = parse_word(accept.body.hash_lock.as_deref().context("hash lock")?).context("hash lock")?;
-        let logs = evm.node.logs(&evm.contract, &evm_htlc::keccak(b"Claimed(bytes32,bytes32)"), &id)?;
+        let logs = evm.node.logs(&evm.contract, &evm_htlc::keccak(b"Claimed(bytes32,bytes32)"), &id, 0)?;
         let secret = logs
             .iter()
             .find_map(|l| evm_htlc::claimed_secret(&l.as_log(), &evm.contract, &id, &hash_lock))
