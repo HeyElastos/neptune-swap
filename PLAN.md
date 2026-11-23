@@ -515,7 +515,7 @@ refund before T refused → refund after T (giver 4.75 → 4.65). What this does
   reproducible (`NeptuneHtlc.init.hex`, `NeptuneHtlc.runtime.hex`; a test compares a fresh
   Foundry build with them). It is deployed by `CREATE2` from the deterministic deployment
   proxy (`0x4e59…956c`) with salt 0, which puts it at `evm_htlc::HTLC_ADDRESS`
-  (`0xdd09…85d2`) wherever that proxy exists (Base, a local anvil). Anyone may deploy it;
+  (`0x5dc5…b260`) wherever that proxy exists (Base, a local anvil). Anyone may deploy it;
   nobody can put anything else there. A lock counts only at that address, and an
   `evm_locked` naming another is refused (`evm_leg::check_named_contract`). The independent
   review (2026-11-17) found that matching the runtime code alone is not enough: other

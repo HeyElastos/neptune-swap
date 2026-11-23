@@ -24,7 +24,7 @@ cargo test --release -p light-core -p neptune-provider -p intents-protocol -p in
 ```bash
 scripts/regtest-node.sh                                   # terminal 1: Neptune regtest, RPC 127.0.0.1:9797
 anvil --chain-id 8453 --port 8545 --host 127.0.0.1        # terminal 2: "Base", local only
-scripts/deploy-htlc-local.sh                              # puts NeptuneHtlc at 0xdd09…85d2
+scripts/deploy-htlc-local.sh                              # puts NeptuneHtlc at 0x5dc5…b260
 scripts/evm-htlc-local.sh                                 # lock → claim, lock → refund on anvil
 ```
 
