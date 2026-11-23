@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn only_the_swap_contract_is_accepted() {
-        assert_eq!(check_named_contract("5dc5930dab83329a3dd8e85ee1de7e8306d6b260"), Ok(()));
+        assert_eq!(check_named_contract("87a6dc890d4e17cf25fa9ce31ce94b562177b2e4"), Ok(()));
         assert!(check_named_contract("0xcccccccccccccccccccccccccccccccccccccccc").is_err());
         assert!(check_named_contract("nonsense").is_err());
         assert_eq!(claim_tx(&[1; 32], &[2; 32], "x").to, HTLC_ADDRESS);

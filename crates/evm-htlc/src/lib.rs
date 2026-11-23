@@ -24,14 +24,14 @@ pub const SALT: Word = [0; 32];
 /// keccak256 of `NeptuneHtlc`'s creation code (`NeptuneHtlc.init.hex`), built from
 /// `contracts/htlc-evm` with its `foundry.toml` (no metadata, so the build is reproducible).
 pub const INIT_CODE_KECCAK: Word = [
-    0x10, 0x8d, 0x71, 0x5f, 0x9d, 0xe4, 0xd7, 0x38, 0x59, 0x6f, 0xb1, 0xaf, 0x7e, 0x68, 0xc4, 0xb9,
-    0x1d, 0xba, 0xf4, 0x7d, 0xef, 0xf2, 0x24, 0x49, 0xf7, 0xee, 0x5d, 0x69, 0xc9, 0xca, 0x7c, 0xef,
+    0x9e, 0x14, 0xa0, 0x1a, 0x09, 0xf8, 0x36, 0x8e, 0xfc, 0xaf, 0x83, 0x51, 0x18, 0x92, 0xcc, 0x09,
+    0x6d, 0x48, 0x11, 0x0a, 0xa9, 0x21, 0xad, 0xec, 0x32, 0xc4, 0x3a, 0xd9, 0x00, 0xcb, 0x01, 0x5c,
 ];
 
 /// keccak256 of the code that creation code leaves deployed (`NeptuneHtlc.runtime.hex`).
 pub const RUNTIME_CODE_KECCAK: Word = [
-    0x7c, 0x5c, 0x8e, 0xf2, 0xa5, 0x6d, 0xda, 0x8d, 0x7f, 0x48, 0x87, 0x51, 0x15, 0x97, 0x17, 0x96,
-    0xaf, 0xf7, 0x80, 0x8f, 0x77, 0xc8, 0x60, 0x98, 0xa4, 0xd5, 0x62, 0xde, 0x57, 0x0c, 0xaa, 0x49,
+    0x8d, 0x89, 0x9b, 0xaf, 0xe7, 0xe6, 0xf6, 0x8b, 0x52, 0x14, 0x93, 0x29, 0x63, 0x5b, 0x68, 0x2f,
+    0x5d, 0xc4, 0xfb, 0x4a, 0x28, 0x47, 0xe2, 0x3f, 0xbd, 0xc6, 0xe0, 0x32, 0x04, 0x87, 0x5d, 0x32,
 ];
 
 /// **The** swap contract, on every chain: `CREATE2` from [`CREATE2_DEPLOYER`] with [`SALT`]
@@ -41,7 +41,7 @@ pub const RUNTIME_CODE_KECCAK: Word = [
 /// alone would not do: other creation code can write fake locks into storage and then leave
 /// the same runtime code behind.
 pub const HTLC_ADDRESS: Address = [
-    0x5d, 0xc5, 0x93, 0x0d, 0xab, 0x83, 0x32, 0x9a, 0x3d, 0xd8, 0xe8, 0x5e, 0xe1, 0xde, 0x7e, 0x83, 0x06, 0xd6, 0xb2, 0x60,
+    0x87, 0xa6, 0xdc, 0x89, 0x0d, 0x4e, 0x17, 0xcf, 0x25, 0xfa, 0x9c, 0xe3, 0x1c, 0xe9, 0x4b, 0x56, 0x21, 0x77, 0xb2, 0xe4,
 ];
 
 /// The address `CREATE2` gives creation code with this hash.
@@ -168,18 +168,20 @@ pub fn decode_lock(ret: &[u8]) -> Option<LockView> {
         let w = word(i);
         w[..32 - bytes].iter().all(|b| *b == 0).then(|| &w[32 - bytes..])
     };
+    // The getter's order is the struct's: sender, receiver, token, refundAfter, spent,
+    // amount, hashLock.
     Some(LockView {
         sender: address(0)?,
         receiver: address(1)?,
         token: address(2)?,
-        amount: u128::from_be_bytes(small(3, 16)?.try_into().ok()?),
-        hash_lock: word(4).try_into().ok()?,
-        refund_after: u64::from_be_bytes(small(5, 8)?.try_into().ok()?),
-        spent: match small(6, 1)? {
+        refund_after: u64::from_be_bytes(small(3, 8)?.try_into().ok()?),
+        spent: match small(4, 1)? {
             [0] => false,
             [1] => true,
             _ => return None,
         },
+        amount: u128::from_be_bytes(small(5, 16)?.try_into().ok()?),
+        hash_lock: word(6).try_into().ok()?,
     })
 }
 
@@ -301,14 +303,14 @@ mod tests {
         let mut ret = vec![0u8; 7 * 32];
         ret[12..32].copy_from_slice(&[0xaa; 20]);
         ret[32 + 12..64].copy_from_slice(&[0xbb; 20]);
-        ret[3 * 32 + 31] = 5;
-        ret[4 * 32..5 * 32].copy_from_slice(&[7; 32]);
-        ret[5 * 32 + 31] = 9;
-        ret[6 * 32 + 31] = 1;
+        ret[3 * 32 + 31] = 9;
+        ret[4 * 32 + 31] = 1;
+        ret[5 * 32 + 31] = 5;
+        ret[6 * 32..7 * 32].copy_from_slice(&[7; 32]);
         let v = decode_lock(&ret).unwrap();
         assert_eq!((v.sender, v.receiver, v.token), ([0xaa; 20], [0xbb; 20], [0; 20]));
         assert_eq!((v.amount, v.hash_lock, v.refund_after, v.spent), (5, [7; 32], 9, true));
-        ret[6 * 32 + 31] = 2;
+        ret[4 * 32 + 31] = 2;
         assert!(decode_lock(&ret).is_none(), "a bool is 0 or 1");
         assert!(decode_lock(&ret[..32]).is_none());
         assert_eq!(hex(&locks(&[0; 32])[..4]), "0xed5e8437"); // cast sig "locks(bytes32)"
@@ -319,7 +321,7 @@ mod tests {
         let init = parse_hex(include_str!("../../../contracts/htlc-evm/NeptuneHtlc.init.hex")).unwrap();
         assert_eq!(keccak(&init), INIT_CODE_KECCAK);
         assert_eq!(create2_address(&CREATE2_DEPLOYER, &SALT, &INIT_CODE_KECCAK), HTLC_ADDRESS);
-        assert_eq!(hex(&HTLC_ADDRESS), "0x5dc5930dab83329a3dd8e85ee1de7e8306d6b260");
+        assert_eq!(hex(&HTLC_ADDRESS), "0x87a6dc890d4e17cf25fa9ce31ce94b562177b2e4");
         let code = parse_hex(include_str!("../../../contracts/htlc-evm/NeptuneHtlc.runtime.hex")).unwrap();
         assert!(is_htlc_code(&code));
         assert!(!is_htlc_code(&code[1..]));

@@ -8,16 +8,17 @@ pragma solidity 0.8.28;
 /// Claiming publishes the secret in the `Claimed` event; that is how the other side learns it.
 /// There is no owner, no fee and no upgrade path.
 contract NeptuneHtlc {
+    /// In this order `token`, `refundAfter` and `spent` share one storage slot: five, not six.
     struct Lock {
         address sender;
         address receiver;
         /// address(0) for ETH.
         address token;
-        uint256 amount;
-        bytes32 hashLock;
         /// Unix seconds (block.timestamp) from which the refund opens and the claim closes.
         uint64 refundAfter;
         bool spent;
+        uint256 amount;
+        bytes32 hashLock;
     }
 
     mapping(bytes32 => Lock) public locks;
@@ -73,7 +74,8 @@ contract NeptuneHtlc {
         external
         returns (bytes32 id)
     {
-        if (token == address(0) || token.code.length == 0) revert InvalidLock();
+        // No code also rules out address(0), the ETH marker, and the precompiles.
+        if (token.code.length == 0) revert InvalidLock();
         id = _open(receiver, token, amount, hashLock, refundAfter);
         uint256 before = _balanceOf(token, address(this));
         _call(token, abi.encodeWithSelector(0x23b872dd, msg.sender, address(this), amount)); // transferFrom
@@ -83,9 +85,7 @@ contract NeptuneHtlc {
     /// @notice Pays the lock to its receiver. Anyone may submit the secret; the funds go only to
     /// the receiver.
     function claim(bytes32 id, bytes32 preimage) external {
-        Lock storage l = locks[id];
-        if (l.sender == address(0)) revert NoSuchLock();
-        if (l.spent) revert AlreadySpent();
+        Lock storage l = _unspent(id);
         if (block.timestamp >= l.refundAfter) revert ClaimWindowClosed();
         if (sha256(abi.encodePacked(preimage)) != l.hashLock) revert WrongPreimage();
         l.spent = true;
@@ -95,9 +95,7 @@ contract NeptuneHtlc {
 
     /// @notice Returns the lock to its sender from `refundAfter` on. Anyone may submit it.
     function refund(bytes32 id) external {
-        Lock storage l = locks[id];
-        if (l.sender == address(0)) revert NoSuchLock();
-        if (l.spent) revert AlreadySpent();
+        Lock storage l = _unspent(id);
         if (block.timestamp < l.refundAfter) revert RefundNotOpen();
         l.spent = true;
         emit Refunded(id);
@@ -113,8 +111,14 @@ contract NeptuneHtlc {
         }
         id = lockId(msg.sender, receiver, token, amount, hashLock, refundAfter);
         if (locks[id].sender != address(0)) revert LockExists();
-        locks[id] = Lock(msg.sender, receiver, token, amount, hashLock, refundAfter, false);
+        locks[id] = Lock(msg.sender, receiver, token, refundAfter, false, amount, hashLock);
         emit Locked(id, msg.sender, receiver, token, amount, hashLock, refundAfter);
+    }
+
+    function _unspent(bytes32 id) private view returns (Lock storage l) {
+        l = locks[id];
+        if (l.sender == address(0)) revert NoSuchLock();
+        if (l.spent) revert AlreadySpent();
     }
 
     function _pay(address token, address to, uint256 amount) private {
