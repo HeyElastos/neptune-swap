@@ -336,3 +336,13 @@ fn eth_on_base_is_its_own_asset() {
     assert!(ASSETS.iter().all(|(chain, symbol, ..)| *symbol != "ELA" || !chain.is_evm()));
     assert!(serde_json::from_str::<Chain>("\"esc\"").is_err(), "Elastos ESC is not a chain of this protocol");
 }
+
+#[test]
+fn a_decoded_message_is_kept_with_its_signer_as_text() {
+    let d = decoded(&intent(), 1);
+    let mut record = serde_json::to_value(&d).unwrap();
+    assert_eq!(record["signer"], d.signer.to_string());
+    assert_eq!(serde_json::from_value::<Decoded<Intent>>(record.clone()).unwrap(), d);
+    record["signer"] = json!("did:key:z6Mk");
+    assert!(serde_json::from_value::<Decoded<Intent>>(record).is_err(), "not a did:key");
+}

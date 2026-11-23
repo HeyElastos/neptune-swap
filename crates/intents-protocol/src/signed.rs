@@ -38,8 +38,9 @@ pub struct Signed {
 }
 
 /// A verified message: its body, its signer, and the SHA-256 (lowercase hex) of the
-/// bytes its signature covers, by which later messages name it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// bytes its signature covers, by which later messages name it. A party's own journal keeps
+/// it as checked (serde), never re-decoded from bytes: those would have expired.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Decoded<T> {
     pub body: T,
     pub signer: DidKey,

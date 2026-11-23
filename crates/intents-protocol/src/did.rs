@@ -1,6 +1,7 @@
 use std::fmt;
 
 use ed25519_dalek::VerifyingKey;
+use serde::{Deserialize, Serialize};
 
 use crate::Error;
 
@@ -8,8 +9,9 @@ use crate::Error;
 const ED25519_PUB: [u8; 2] = [0xed, 0x01];
 const PREFIX: &str = "did:key:z";
 
-/// An Ed25519 `did:key`, the only signer type the protocol accepts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// An Ed25519 `did:key`, the only signer type the protocol accepts. Stored as its text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct DidKey(VerifyingKey);
 
 impl DidKey {
@@ -27,6 +29,19 @@ impl DidKey {
 
     pub fn verifying_key(&self) -> &VerifyingKey {
         &self.0
+    }
+}
+
+impl TryFrom<String> for DidKey {
+    type Error = Error;
+    fn try_from(did: String) -> Result<Self, Error> {
+        Self::parse(&did)
+    }
+}
+
+impl From<DidKey> for String {
+    fn from(did: DidKey) -> Self {
+        did.to_string()
     }
 }
 

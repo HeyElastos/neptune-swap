@@ -1,8 +1,9 @@
 //! A solver that answers Neptune Swap apps over the carrier, for test networks: it publishes
 //! its standing offers on the offers topic, opens the sealed messages addressed to it on the
 //! deals topic, quotes the intents that take one of its offers, and runs each deal
-//! (`solver::deal`) to the end. Its Neptune wallet is its own provider (stdio); its EVM key is
-//! a local test key on a local chain.
+//! (`solver::deal`) to the end, kept in its provider's journal: after a restart it picks up
+//! every open deal. Its Neptune wallet is its own provider (stdio); its EVM key is a local
+//! test key on a local chain.
 //!
 //!   solver-daemon <config.json>
 //!
@@ -122,6 +123,14 @@ fn main() -> Result<()> {
     let mut published = Instant::now() - Duration::from_secs(OFFER_SECS);
     let mut met = Instant::now() - Duration::from_secs(PEERS_SECS);
     let mut deals: HashMap<String, Deal> = HashMap::new();
+    for deal in Deal::load(&neptune)? {
+        if !matches!(deal.stage, Stage::Done | Stage::Failed) {
+            println!("resuming deal {}…: {}", &deal.intent_digest()[..12], deal.line);
+            deals.insert(deal.intent_digest().to_string(), deal);
+        }
+    }
+    // What the journal holds for each deal: a deal that changed is kept again.
+    let mut saved: HashMap<String, serde_json::Value> = HashMap::new();
     loop {
         // A peer that joins a topic after us never hears our first join: ask again, often.
         if !config.peers.is_empty() && met.elapsed() >= Duration::from_secs(PEERS_SECS) {
@@ -162,9 +171,21 @@ fn main() -> Result<()> {
                 Err(e) => deal.line = format!("{e:#}"),
             }
         }
+        for (digest, deal) in &deals {
+            let record = serde_json::to_value(deal)?;
+            if saved.get(digest) != Some(&record) {
+                match deal.save(&chains) {
+                    Ok(()) => {
+                        saved.insert(digest.clone(), record);
+                    }
+                    Err(e) => eprintln!("keeping deal {}…: {e:#}", &digest[..12]),
+                }
+            }
+        }
         deals.retain(|digest, deal| {
             let done = matches!(deal.stage, Stage::Done | Stage::Failed);
             if done {
+                saved.remove(digest);
                 println!("deal {}…: {}", &digest[..12], deal.line);
             }
             !done

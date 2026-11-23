@@ -13,8 +13,7 @@
 //!   the solver's claim, claim the NPT. If the solver never claims, refund on Base.
 //!
 //! The whole swap is kept in the provider's journal after every step (it serializes), so a
-//! closed page picks it up again. Messages are kept as their checked bodies, digests and
-//! signers, never re-decoded from bytes (they would have expired).
+//! closed page picks it up again. Messages are kept as checked (`Decoded`).
 
 use ed25519_dalek::SigningKey;
 use evm_htlc::{hex, parse_address, parse_word, Address, LockView, Word};
@@ -42,25 +41,6 @@ pub const NPT_SETTLED_DEPTH: u64 = 3;
 const NPT_LOCK_WAIT_SECS: u64 = 3 * 3600;
 /// Slack for the solver's clock when it sets its NPT refund time.
 const CLOCK_SLACK_SECS: u64 = 600;
-
-/// A checked message, kept as what was checked.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Kept<T> {
-    pub body: T,
-    pub signer: String,
-    pub digest: String,
-}
-
-impl<T: Clone> Kept<T> {
-    fn of(d: &Decoded<T>) -> Self {
-        Self { body: d.body.clone(), signer: d.signer.to_string(), digest: d.digest.clone() }
-    }
-
-    fn decoded(&self) -> Result<Decoded<T>, String> {
-        let signer = DidKey::parse(&self.signer).map_err(|e| e.to_string())?;
-        Ok(Decoded { body: self.body.clone(), signer, digest: self.digest.clone() })
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,9 +90,9 @@ pub struct Swap {
     /// it never controls funds.
     key: String,
     pub solver: String,
-    intent: Kept<Intent>,
-    quote: Option<Kept<Quote>>,
-    accept: Option<Kept<Accept>>,
+    intent: Decoded<Intent>,
+    quote: Option<Decoded<Quote>>,
+    accept: Option<Decoded<Accept>>,
     /// The user's Base account (40 hex, no 0x).
     account: Option<String>,
     /// Gives NPT: the provider's id for the prepared secret and the lock.
@@ -180,7 +160,7 @@ impl Swap {
             line: "Sent to the solver; waiting for its quote.".into(),
             key: hex_seed(&seed),
             solver: solver.to_string(),
-            intent: Kept::of(&decoded),
+            intent: decoded,
             quote: None,
             accept: None,
             account: None,
@@ -258,11 +238,11 @@ impl Swap {
     }
 
     fn quote(&self) -> Result<Decoded<Quote>, String> {
-        self.quote.as_ref().ok_or("no quote")?.decoded()
+        self.quote.clone().ok_or("no quote".into())
     }
 
     fn accept_msg(&self) -> Result<Decoded<Accept>, String> {
-        self.accept.as_ref().ok_or("no accept")?.decoded()
+        self.accept.clone().ok_or("no accept".into())
     }
 
     fn fail(&mut self, why: impl Into<String>) {
@@ -281,8 +261,8 @@ impl Swap {
         if quote.signer.to_string() != self.solver {
             return Err("a quote from someone else than the solver asked".into());
         }
-        quote.body.answers(&self.intent.decoded()?).map_err(|e| e.to_string())?;
-        self.quote = Some(Kept::of(&quote));
+        quote.body.answers(&self.intent).map_err(|e| e.to_string())?;
+        self.quote = Some(quote);
         self.step = Step::Quoted;
         self.line = "Quote received and checked.".into();
         Ok(())
@@ -309,8 +289,8 @@ impl Swap {
         };
         let body = Accept { v: PROTOCOL_VERSION, quote: quote.digest.clone(), hash_lock, claim_key, refund_key };
         let (accept, sealed) = self.sign_and_seal(&body, &self.solver.clone(), now)?;
-        accept.body.answers(&accept.signer, &self.intent.decoded()?, &quote, now).map_err(|e| e.to_string())?;
-        self.accept = Some(Kept::of(&accept));
+        accept.body.answers(&accept.signer, &self.intent, &quote, now).map_err(|e| e.to_string())?;
+        self.accept = Some(accept);
         self.account = Some(no0x(account));
         self.accepted_at = now;
         if self.gives_npt {

@@ -10,6 +10,9 @@
 //!   the hash lock, lock the NPT after the accept, check the user's EVM lock on chain, claim
 //!   it (revealing the secret; the user then claims the NPT). Refund the NPT if the user
 //!   never locks.
+//!
+//! Each deal is kept in the solver's own provider journal (`swap_save`, as the app keeps its
+//! swaps) before every send, so a restarted solver picks it up and still claims or refunds.
 
 use anyhow::{bail, ensure, Context, Result};
 use ed25519_dalek::SigningKey;
@@ -19,6 +22,7 @@ use intents_protocol::{
     asset_row, decode, may_reveal, other_refund_at, Accept, Amount, Chain, Decoded, EvmLocked, Intent, Message, Net, NptLocked, Offer, Quote,
     Signed, NEPTUNE_SETTLE_SECS, PROTOCOL_VERSION,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::neptune::{npt_text, Provider};
@@ -32,7 +36,8 @@ pub const EVM_CONFIRMATIONS: u64 = 2;
 /// How long a quote stands.
 const QUOTE_SECS: u64 = 300;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Stage {
     /// Quoted; waiting for the user's accept.
     Quoted,
@@ -56,7 +61,10 @@ pub struct Chains<'a> {
     pub wallet: &'a Wallet,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Deal {
+    /// `step` in the journal, which prunes `done` and `failed` records first.
+    #[serde(rename = "step")]
     pub stage: Stage,
     pub user: String,
     intent: Decoded<Intent>,
@@ -165,6 +173,7 @@ impl Deal {
             claim_sent: false,
             line: "quoted".into(),
         };
+        deal.save(c)?;
         Ok((deal, bytes))
     }
 
@@ -179,6 +188,22 @@ impl Deal {
         &self.intent.digest
     }
 
+    /// Keeps the deal in the provider's journal, under its intent's digest.
+    pub fn save(&self, c: &Chains) -> Result<()> {
+        c.neptune.call("swap_save", json!({ "id": self.intent.digest, "record": serde_json::to_value(self)? }))?;
+        Ok(())
+    }
+
+    /// Every deal kept in the provider's journal.
+    pub fn load(neptune: &Provider) -> Result<Vec<Self>> {
+        let list = neptune.call("swap_list", json!({}))?;
+        let records = list["swaps"].as_object().context("no journal")?;
+        Ok(records
+            .iter()
+            .filter_map(|(id, r)| serde_json::from_value(r.clone()).map_err(|e| eprintln!("journal record {id} is not a deal: {e}")).ok())
+            .collect())
+    }
+
     fn solver_gives_npt(&self) -> bool {
         self.intent.body.want.is_npt()
     }
@@ -190,32 +215,38 @@ impl Deal {
     /// The user's accept. When the solver gives NPT it locks the NPT now and returns the
     /// signed `npt_locked` for the user.
     pub fn on_accept(&mut self, accept: Decoded<Accept>, key: &SigningKey, net: Net, c: &Chains) -> Result<Option<Vec<u8>>> {
-        ensure!(self.stage == Stage::Quoted, "not waiting for an accept");
-        accept.body.answers(&accept.signer, &self.intent, &self.quote, now_secs())?;
-        self.accept = Some(accept);
-        if !self.solver_gives_npt() {
-            self.stage = Stage::AwaitNpt;
-            self.line = "accepted; waiting for the user's NPT lock".into();
-            return Ok(None);
+        // The same accept again (a lost reply, a restart): the provider gives the same lock
+        // back for this `swap_id`, never a second one.
+        let again = self.stage == Stage::AwaitEvm && self.accept.as_ref().map(|a| &a.digest) == Some(&accept.digest);
+        ensure!(self.stage == Stage::Quoted || again, "not waiting for an accept");
+        if !again {
+            accept.body.answers(&accept.signer, &self.intent, &self.quote, now_secs())?;
+            self.accept = Some(accept);
+            if !self.solver_gives_npt() {
+                self.stage = Stage::AwaitNpt;
+                self.line = "accepted; waiting for the user's NPT lock".into();
+                return Ok(None);
+            }
+            self.from_height = c.neptune.tip()?;
+            self.neptune_refund_ms = (now_secs() + self.quote.body.neptune_lock_secs) * 1000;
+            // Kept before the lock goes out: a restart then still refunds it.
+            self.stage = Stage::AwaitEvm;
+            self.line = "locking the NPT".into();
+            self.save(c)?;
         }
-        let from_height = c.neptune.tip()?;
-        let refund_ms = (now_secs() + self.quote.body.neptune_lock_secs) * 1000;
         let locked = c.neptune.call(
             "htlc_lock",
             json!({
                 "amount": npt_text(self.quote.body.want_amount.units()),
                 "fee": NPT_FEE,
                 "claim_lock": self.accept()?.body.claim_key,
-                "refund_after_ms": refund_ms,
+                "refund_after_ms": self.neptune_refund_ms,
                 "swap_id": self.swap_id,
             }),
         )?;
         self.note = Some(locked["note"].clone());
-        self.from_height = from_height;
-        self.neptune_refund_ms = refund_ms;
-        let body = NptLocked { v: PROTOCOL_VERSION, deal: self.accept()?.digest.clone(), note: locked["note"].clone(), from_height };
+        let body = NptLocked { v: PROTOCOL_VERSION, deal: self.accept()?.digest.clone(), note: locked["note"].clone(), from_height: self.from_height };
         let (_, bytes) = sign(&body, key, net)?;
-        self.stage = Stage::AwaitEvm;
         self.line = "NPT locked; waiting for the user's EVM lock".into();
         Ok(Some(bytes))
     }
@@ -265,6 +296,8 @@ impl Deal {
         let hash_lock = parse_word(accept.body.hash_lock.as_deref().context("hash lock")?).context("hash lock")?;
         let amount = self.quote.body.want_amount.units();
         let id = evm_htlc::lock_id(&c.wallet.address, &receiver, &token, amount, &hash_lock, refund_after);
+        // Kept before the lock goes out: after a restart this step finds the lock by its id.
+        self.save(c)?;
         if lock_view(c.evm, &id)?.sender == [0; 20] {
             if token == [0; 20] {
                 c.evm.send(c.wallet, &HTLC_ADDRESS, amount, evm_htlc::lock(&receiver, &hash_lock, refund_after))?;
@@ -422,6 +455,8 @@ impl Deal {
         let secret = c.neptune.call("htlc_secret", json!({ "swap_id": self.swap_id }))?;
         let secret = parse_word(secret["secret"].as_str().context("secret")?).context("secret")?;
         self.claim_sent = true;
+        // Kept before the secret goes out: from here the deal never refunds its NPT.
+        self.save(c)?;
         c.evm.send(c.wallet, &HTLC_ADDRESS, 0, evm_htlc::claim(&id, &secret))?;
         self.stage = Stage::Done;
         self.line = "claimed on the EVM chain; the user claims the NPT next".into();
@@ -479,5 +514,54 @@ mod tests {
         assert_eq!(matches(&offer, &intent(100_000, 1)), None, "below the offer's least");
         let swapped = Intent { give: npt.clone(), want: usdc.clone(), ..intent(15_000_000, 1) };
         assert_eq!(matches(&offer, &swapped), None, "the other direction");
+    }
+
+    #[test]
+    fn a_deal_comes_back_whole_from_its_journal_record() {
+        let signer = intents_protocol::DidKey::new(SigningKey::from_bytes(&[7; 32]).verifying_key());
+        let usdc = Asset { chain: Chain::Base, symbol: "USDC".into() };
+        let intent = Intent {
+            v: PROTOCOL_VERSION,
+            id: "11".repeat(16),
+            give: Asset::npt(),
+            give_amount: Amount::new(4),
+            want: usdc,
+            min_want_amount: Amount::new(1),
+            expires_at: 2_000_000_000,
+        };
+        let quote = Quote {
+            v: PROTOCOL_VERSION,
+            intent: "22".repeat(32),
+            want_amount: Amount::new(1),
+            other_lock_secs: 7_200,
+            neptune_lock_secs: 25_200,
+            hash_lock: None,
+            claim_key: "33".repeat(40),
+            refund_key: "44".repeat(20),
+            expires_at: 2_000_000_000,
+        };
+        let deal = Deal {
+            stage: Stage::AwaitClaim,
+            user: signer.to_string(),
+            intent: Decoded { body: intent, signer, digest: "55".repeat(32) },
+            quote: Decoded { body: quote, signer, digest: "66".repeat(32) },
+            accept: None,
+            claim_index: 3,
+            swap_id: None,
+            note: Some(json!({ "amount": "1" })),
+            from_height: 10,
+            neptune_refund_ms: 1_900_000_000_000,
+            evm_id: Some([9; 32]),
+            evm_refund_after: 1_899_990_000,
+            seen_at: None,
+            submitted: Some((5, true)),
+            claim_sent: false,
+            line: "EVM locked".into(),
+        };
+        let record = serde_json::to_value(&deal).unwrap();
+        assert_eq!(record["step"], "await_claim", "the journal prunes by step");
+        assert_eq!(record["intent"]["signer"], signer.to_string());
+        let back: Deal = serde_json::from_value(record.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&back).unwrap(), record);
     }
 }
