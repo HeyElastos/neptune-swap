@@ -189,8 +189,8 @@ fn the_user_gives_npt_for_eth() -> Result<()> {
     let id = swap.evm_id().unwrap();
     let view = solver::deal::lock_view(&w.evm, &id)?;
     assert_eq!(swap.check_evm_lock(&view, 0, now()), Ok(false));
-    w.mine_evm(intents_ui::swap::EVM_CONFIRMATIONS)?;
-    assert_eq!(swap.check_evm_lock(&view, intents_ui::swap::EVM_CONFIRMATIONS, now()), Ok(true));
+    w.mine_evm(intents_protocol::EVM_CONFIRMATIONS)?;
+    assert_eq!(swap.check_evm_lock(&view, intents_protocol::EVM_CONFIRMATIONS, now()), Ok(true));
     let secret = w.user_npt.call("htlc_secret", json!({ "swap_id": swap.swap_id() }))?;
     let tx = swap.claim_tx(&evm_htlc::parse_word(secret["secret"].as_str().unwrap()).unwrap()).map_err(anyhow::Error::msg)?;
     w.evm.send(&w.user_wallet, &tx.to, tx.value, tx.data)?;

@@ -68,8 +68,19 @@ pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 pub const MAX_TTL_SECS: u64 = 3600;
 
 /// Allowance for the NPT giver's lock to reach the confirmations the receiver waits for
-/// (6 Neptune blocks at a 588 s target, with room for slow blocks).
+/// ([`NPT_MIN_DEPTH`] Neptune blocks at a 588 s target, with room for slow blocks).
 pub const NEPTUNE_SETTLE_SECS: u64 = 2 * 3600;
+
+/// Neptune blocks the NPT giver's lock must be under on the receiver's own node (its own
+/// block counted) before the receiver locks anything. One depth for every amount: a depth
+/// that grows with the amount is still to be designed (PLAN.md, "Faster swaps").
+pub const NPT_MIN_DEPTH: u64 = 6;
+/// Neptune blocks under a claim or refund before it counts as done.
+pub const NPT_SETTLED_DEPTH: u64 = 3;
+/// EVM blocks under a counterparty's lock before the secret is revealed by claiming it, and
+/// under a claim before the swap counts as done: about 40 seconds on Base, well past its
+/// re-org depth in practice.
+pub const EVM_CONFIRMATIONS: u64 = 20;
 
 /// No HTLC in a quote may lock funds longer than this.
 pub const MAX_LOCK_SECS: u64 = 48 * 3600;

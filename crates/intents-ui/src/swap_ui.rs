@@ -13,11 +13,12 @@ use std::rc::Rc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use intents_protocol::{EVM_CONFIRMATIONS, NPT_SETTLED_DEPTH};
 use serde_json::{json, Value};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 use crate::evm_leg::{self, Account};
-use crate::swap::{Step, Swap, EVM_CONFIRMATIONS, NPT_SETTLED_DEPTH};
+use crate::swap::{Step, Swap};
 use crate::{intent, offers_ui, runtime, wallet_ui, AddressRow, AppWindow, StepRow};
 
 /// How often swaps look for news while they wait.

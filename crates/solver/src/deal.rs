@@ -20,7 +20,7 @@ use evm_htlc::{decode_lock, hex, parse_address, parse_hex, parse_word, Address, 
 use evm_signer::{Node, Wallet};
 use intents_protocol::{
     asset_row, decode, may_reveal, other_refund_at, Accept, Amount, Chain, Decoded, EvmLocked, Intent, Message, Net, NptLocked, Offer, Quote,
-    Signed, NEPTUNE_SETTLE_SECS, PROTOCOL_VERSION,
+    Signed, EVM_CONFIRMATIONS, NEPTUNE_SETTLE_SECS, NPT_MIN_DEPTH, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -29,10 +29,6 @@ use crate::neptune::{npt_text, Provider};
 
 /// NPT fee per Neptune transaction.
 pub const NPT_FEE: &str = "0.05";
-/// Neptune blocks the user's NPT lock must be under before the solver locks anything.
-pub const NPT_MIN_DEPTH: u64 = 2;
-/// EVM blocks after the user's lock before the solver reveals by claiming it.
-pub const EVM_CONFIRMATIONS: u64 = 2;
 /// How long a quote stands.
 const QUOTE_SECS: u64 = 300;
 
