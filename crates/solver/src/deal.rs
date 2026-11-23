@@ -14,21 +14,19 @@
 //! Each deal is kept in the solver's own provider journal (`swap_save`, as the app keeps its
 //! swaps) before every send, so a restarted solver picks it up and still claims or refunds.
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use ed25519_dalek::SigningKey;
 use evm_htlc::{decode_lock, hex, parse_address, parse_hex, parse_word, Address, LockView, Word, HTLC_ADDRESS};
 use evm_signer::{Node, Wallet};
 use intents_protocol::{
     asset_row, decode, may_reveal, other_refund_at, Accept, Amount, Chain, Decoded, EvmLocked, Intent, Message, Net, NptLocked, Offer, Quote,
-    Signed, EVM_CONFIRMATIONS, NEPTUNE_SETTLE_SECS, NPT_MIN_DEPTH, PROTOCOL_VERSION,
+    Signed, EVM_CONFIRMATIONS, NEPTUNE_SETTLE_SECS, NPT_FEE, NPT_MIN_DEPTH, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::neptune::{npt_text, Provider};
 
-/// NPT fee per Neptune transaction.
-pub const NPT_FEE: &str = "0.05";
 /// How long a quote stands.
 const QUOTE_SECS: u64 = 300;
 
@@ -88,7 +86,7 @@ pub struct Deal {
     pub line: String,
 }
 
-fn now_secs() -> u64 {
+pub fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
@@ -473,11 +471,7 @@ impl Deal {
 
 pub fn lock_view(evm: &Node, id: &Word) -> Result<LockView> {
     let ret = evm.call("eth_call", json!([{ "to": hex(&HTLC_ADDRESS), "data": hex(&evm_htlc::locks(id)) }, "latest"]))?;
-    let bytes = parse_hex(ret.as_str().context("eth_call")?).context("hex")?;
-    match decode_lock(&bytes) {
-        Some(v) => Ok(v),
-        None => bail!("not a lock"),
-    }
+    ret.as_str().and_then(parse_hex).as_deref().and_then(decode_lock).context("not a lock")
 }
 
 #[cfg(test)]

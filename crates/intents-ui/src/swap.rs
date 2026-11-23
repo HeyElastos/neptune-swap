@@ -19,15 +19,13 @@ use ed25519_dalek::SigningKey;
 use evm_htlc::{hex, parse_address, parse_word, Address, LockView, Word};
 use intents_protocol::{
     decode, may_reveal, other_refund_at, seal, Accept, Chain, Decoded, DidKey, EvmLocked, Intent, Message, Net, NptLocked, Quote, Signed,
-    EVM_CONFIRMATIONS, NPT_MIN_DEPTH, PROTOCOL_VERSION,
+    EVM_CONFIRMATIONS, NPT_FEE, NPT_MIN_DEPTH, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::evm_leg::{self, Expected, Tx};
 
-/// NPT fee per Neptune transaction of a swap.
-pub const NPT_FEE: &str = "0.05";
 /// How long after the quote the user waits for the solver's NPT lock before giving up
 /// (nothing of the user's is locked yet).
 const NPT_LOCK_WAIT_SECS: u64 = 3 * 3600;

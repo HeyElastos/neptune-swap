@@ -75,6 +75,8 @@ pub const NEPTUNE_SETTLE_SECS: u64 = 2 * 3600;
 /// block counted) before the receiver locks anything. One depth for every amount: a depth
 /// that grows with the amount is still to be designed (PLAN.md, "Faster swaps").
 pub const NPT_MIN_DEPTH: u64 = 6;
+/// NPT fee per Neptune transaction of a swap (lock, claim or refund), app and solver alike.
+pub const NPT_FEE: &str = "0.05";
 /// Neptune blocks under a claim or refund before it counts as done.
 pub const NPT_SETTLED_DEPTH: u64 = 3;
 /// EVM blocks under a counterparty's lock before the secret is revealed by claiming it, and
