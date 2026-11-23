@@ -123,8 +123,12 @@ fn main() -> Result<()> {
     let mut published = Instant::now() - Duration::from_secs(OFFER_SECS);
     let mut met = Instant::now() - Duration::from_secs(PEERS_SECS);
     let mut deals: HashMap<String, Deal> = HashMap::new();
+    // Finished deals' intent digests, until the intent expires: a replay opens no new deal.
+    let mut finished: HashMap<String, u64> = HashMap::new();
     for deal in Deal::load(&neptune)? {
-        if !matches!(deal.stage, Stage::Done | Stage::Failed) {
+        if matches!(deal.stage, Stage::Done | Stage::Failed) {
+            finished.insert(deal.intent_digest().to_string(), deal.intent_expires_at());
+        } else {
             println!("resuming deal {}…: {}", &deal.intent_digest()[..12], deal.line);
             deals.insert(deal.intent_digest().to_string(), deal);
         }
@@ -160,7 +164,7 @@ fn main() -> Result<()> {
 
         for sealed in carrier.recv(deals_topic).unwrap_or_default() {
             let Ok(plain) = open(&key, &sealed) else { continue };
-            if let Err(e) = handle(&plain, &key, net, &chains, &config.offers, &ids, &mut deals, &carrier, deals_topic) {
+            if let Err(e) = handle(&plain, &key, net, &chains, &config.offers, &ids, &mut deals, &finished, &carrier, deals_topic) {
                 eprintln!("a message: {e:#}");
             }
         }
@@ -186,10 +190,12 @@ fn main() -> Result<()> {
             let done = matches!(deal.stage, Stage::Done | Stage::Failed);
             if done {
                 saved.remove(digest);
+                finished.insert(digest.clone(), deal.intent_expires_at());
                 println!("deal {}…: {}", &digest[..12], deal.line);
             }
             !done
         });
+        finished.retain(|_, expires_at| *expires_at > now_secs());
         std::thread::sleep(Duration::from_secs(3));
     }
 }
@@ -236,14 +242,15 @@ fn handle(
     offers: &[OfferTerms],
     ids: &[String],
     deals: &mut HashMap<String, Deal>,
+    finished: &HashMap<String, u64>,
     carrier: &Carrier,
     topic: &str,
 ) -> anyhow::Result<()> {
     let now = now_secs();
     if let Ok(intent) = decode::<Intent>(plain, now, net) {
-        // An intent seen before (resent, or replayed) never replaces its deal: that would drop
-        // the deal's locks and keys mid-swap.
-        if deals.contains_key(&intent.digest) || deals.values().any(|d| d.user == intent.signer.to_string()) {
+        // An intent seen before (resent, or replayed) never replaces its deal, which would drop
+        // the deal's locks and keys mid-swap, nor opens a second one once it is finished.
+        if deals.contains_key(&intent.digest) || finished.contains_key(&intent.digest) || deals.values().any(|d| d.user == intent.signer.to_string()) {
             return Ok(());
         }
         anyhow::ensure!(deals.len() < OPEN_DEALS_MAX, "too many open deals; not quoting");

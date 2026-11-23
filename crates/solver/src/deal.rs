@@ -187,6 +187,11 @@ impl Deal {
         &self.intent.digest
     }
 
+    /// Until when the intent decodes: a finished deal's digest is kept that long.
+    pub fn intent_expires_at(&self) -> u64 {
+        self.intent.body.expires_at
+    }
+
     /// Keeps the deal in the provider's journal, under its intent's digest.
     pub fn save(&self, c: &Chains) -> Result<()> {
         c.neptune.call("swap_save", json!({ "id": self.intent.digest, "record": serde_json::to_value(self)? }))?;

@@ -332,7 +332,7 @@ impl Provider {
                 w.wallets.send(&n.id, n.chain, &to, &amount, &fee, now_ms(), &HttpNode(n.rpc.clone()))
             }),
             Request::HtlcClaimLock { network } => self.swap_start(&network, |w, n| w.wallets.htlc_claim_lock(&n.id, n.chain)),
-            Request::HtlcPrepare { network } => self.swap_start(&network, |w, n| w.wallets.htlc_prepare(&n.id, n.chain)),
+            Request::HtlcPrepare { network } => self.swap_start(&network, |w, n| w.wallets.htlc_prepare(&n.id, n.chain, now_ms())),
             Request::HtlcLock { network, amount, fee, claim_lock, refund_after_ms, swap_id, background } => self.swap_start(&network, |w, n| {
                 w.wallets.htlc_lock(&n.id, n.chain, &amount, &fee, &claim_lock, refund_after_ms, swap_id.as_deref(), now_ms(), &HttpNode(n.rpc.clone()), proving(background))
             }),

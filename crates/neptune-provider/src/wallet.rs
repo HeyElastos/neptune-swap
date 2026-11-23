@@ -566,9 +566,14 @@ mod tests {
         let bad = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", "not a digest", 3_000, None, 2_000, &node, Proving::Wait);
         assert!(bad.unwrap_err().to_string().contains("claim lock"));
         assert!(wallets.htlc_secret("neptune-main", "nope").is_err());
-        let prepared = wallets.htlc_prepare("neptune-main", Network::Main).unwrap();
+        let prepared = wallets.htlc_prepare("neptune-main", Network::Main, 2_000).unwrap();
         assert_eq!(prepared["hash_lock"].as_str().unwrap().len(), 64);
         assert!(prepared["hash_lock"].as_str().unwrap().starts_with(prepared["swap_id"].as_str().unwrap()));
+        // A prepared secret with no lock is dropped a day later, when the next one is made.
+        let later = wallets.htlc_prepare("neptune-main", Network::Main, 2_000 + 24 * 3600 * 1000).unwrap();
+        let book: serde_json::Value = serde_json::from_slice(&fs::read(root.join("neptune-main/swaps.json")).unwrap()).unwrap();
+        let kept: Vec<&serde_json::Value> = book["prepared"].as_array().unwrap().iter().map(|p| &p["id"]).collect();
+        assert_eq!(kept, [&later["swap_id"]]);
         let unknown = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", claim_lock, 3_000, Some("nope"), 2_000, &node, Proving::Background);
         assert!(unknown.unwrap_err().to_string().contains("no such prepared swap"));
         assert!(wallets.htlc_status("neptune-main", None, None, 0, &node).is_err());

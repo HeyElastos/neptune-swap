@@ -56,7 +56,14 @@ struct Book {
 struct Prepared {
     id: String,
     secret: String,
+    /// When it was made (ms; 0 in books from before this was kept).
+    #[serde(default)]
+    made_ms: u64,
 }
+
+/// A prepared secret is dropped a day after it was made: the quote it answered is long gone
+/// by then, and a secret with no lock guards nothing (a late `htlc_lock` fails, locking nothing).
+const PREPARED_MS: u64 = 24 * 3600 * 1000;
 
 impl Wallets {
     fn book(&self, network_id: &str) -> Result<Book> {
@@ -96,12 +103,13 @@ impl Wallets {
 
     /// Makes a swap's secret ahead of its lock and returns the hash lock, for
     /// the NPT giver's Accept. `htlc_lock` with this `swap_id` uses it.
-    pub fn htlc_prepare(&self, network_id: &str, network: Network) -> Result<Value> {
+    pub fn htlc_prepare(&self, network_id: &str, network: Network, now_ms: u64) -> Result<Value> {
         self.load(network_id, network)?.context("no wallet")?;
         let (secret, hash_lock) = new_secret();
         let id = hex(&hash_lock)[..16].to_string();
         let mut book = self.book(network_id)?;
-        book.prepared.push(Prepared { id: id.clone(), secret: hex(&secret) });
+        book.prepared.retain(|p| now_ms.saturating_sub(p.made_ms) < PREPARED_MS);
+        book.prepared.push(Prepared { id: id.clone(), secret: hex(&secret), made_ms: now_ms });
         self.save_book(network_id, &book)?;
         Ok(json!({ "swap_id": id, "hash_lock": hex(&hash_lock) }))
     }
