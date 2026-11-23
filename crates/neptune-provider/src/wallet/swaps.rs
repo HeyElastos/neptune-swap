@@ -174,7 +174,7 @@ impl Wallets {
             None => new_secret(),
             Some((id, secret)) => {
                 book.prepared.retain(|p| p.id != id);
-                (secret, light_core::swap::hash_lock_of(&secret))
+                (secret, light_core::swap::hash_lock(&secret))
             }
         };
         let (details, note) =

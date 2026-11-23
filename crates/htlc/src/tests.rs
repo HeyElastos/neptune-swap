@@ -1,5 +1,6 @@
 use sha2::{Digest as _, Sha256};
 use tasm_lib::twenty_first::prelude::MerkleTree;
+use tasm_lib::twenty_first::util_types::merkle_tree::MerkleTreeInclusionProof;
 use triton_vm::isa::instruction::InstructionError;
 
 use super::*;
@@ -42,10 +43,23 @@ fn run(htlc: &Htlc, kernel: Digest, witness: NonDeterminism) -> Result<(), Optio
     }
 }
 
+/// The lock script's rule in plain Rust (with the audited `sha2`): the program is held to it.
+fn accepts(htlc: &Htlc, kernel_mast_hash: Digest, spend: &Spend) -> bool {
+    match spend {
+        Spend::Claim { preimage, secret } => hash_lock(preimage) == htlc.hash_lock && spending_lock(*secret) == htlc.claim_lock,
+        Spend::Refund { timestamp, path, secret } => {
+            let ts = bfe!(*timestamp);
+            let leaf = (TIMESTAMP_LEAF, Tip5::hash_varlen(&[ts]));
+            let proof = MerkleTreeInclusionProof { tree_height: 3, indexed_leafs: vec![leaf], authentication_structure: path.clone() };
+            proof.verify(kernel_mast_hash) && ts.value() >= htlc.refund_after && spending_lock(*secret) == htlc.refund_lock
+        }
+    }
+}
+
 /// Spends by the program and by the Rust model, and checks they agree.
 fn spend(htlc: &Htlc, kernel: Digest, how: &Spend) -> Result<(), Option<i128>> {
     let result = run(htlc, kernel, htlc.witness(how));
-    assert_eq!(result.is_ok(), htlc.accepts(kernel, how), "program and model disagree");
+    assert_eq!(result.is_ok(), accepts(htlc, kernel, how), "program and model disagree");
     result
 }
 

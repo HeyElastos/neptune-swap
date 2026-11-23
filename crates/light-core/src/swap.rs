@@ -10,6 +10,7 @@
 //! claim or refund. Only their hashes (the locks) ever leave the wallet.
 
 use anyhow::{bail, ensure, Context, Result};
+pub use htlc::hash_lock;
 use htlc::{Htlc, Spend};
 use neptune_consensus::transaction::lock_script::LockScriptAndWitness;
 use neptune_consensus::transaction::primitive_witness::PrimitiveWitness;
@@ -273,13 +274,7 @@ impl LightWallet {
 /// A fresh 32-byte secret and its SHA-256 hash lock (the NPT giver's).
 pub fn new_secret() -> ([u8; 32], [u8; 32]) {
     let secret: [u8; 32] = rand::random();
-    (secret, hash_lock_of(&secret))
-}
-
-/// SHA-256 of the 32-byte secret: the hash lock on every chain of the swap.
-pub fn hash_lock_of(secret: &[u8; 32]) -> [u8; 32] {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(secret).into()
+    (secret, hash_lock(&secret))
 }
 
 pub fn hex(bytes: &[u8]) -> String {

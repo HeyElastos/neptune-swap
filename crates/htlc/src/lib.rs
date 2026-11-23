@@ -20,7 +20,6 @@ mod tests;
 
 use tasm_lib::arithmetic::u64::lt::Lt;
 use tasm_lib::hashing::{hash_from_stack::HashFromStack, merkle_verify::MerkleVerify};
-use tasm_lib::twenty_first::util_types::merkle_tree::MerkleTreeInclusionProof;
 use tasm_lib::{library::Library, prelude::DataType};
 use triton_vm::prelude::*;
 
@@ -97,22 +96,12 @@ impl Htlc {
             }
         }
     }
+}
 
-    /// The same rule in plain Rust (with the audited `sha2`): tests hold the program to it.
-    pub fn accepts(&self, kernel_mast_hash: Digest, spend: &Spend) -> bool {
-        use sha2::Digest as _;
-        match spend {
-            Spend::Claim { preimage, secret } => {
-                sha2::Sha256::digest(preimage)[..] == self.hash_lock && spending_lock(*secret) == self.claim_lock
-            }
-            Spend::Refund { timestamp, path, secret } => {
-                let ts = bfe!(*timestamp);
-                let leaf = (TIMESTAMP_LEAF, Tip5::hash_varlen(&[ts]));
-                let proof = MerkleTreeInclusionProof { tree_height: 3, indexed_leafs: vec![leaf], authentication_structure: path.clone() };
-                proof.verify(kernel_mast_hash) && ts.value() >= self.refund_after && spending_lock(*secret) == self.refund_lock
-            }
-        }
-    }
+/// SHA-256 of the 32-byte secret: the hash lock on every chain of the swap.
+pub fn hash_lock(secret: &[u8; 32]) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(secret).into()
 }
 
 /// 32 bytes as 8 big-endian u32 words, SHA-256's word order.
