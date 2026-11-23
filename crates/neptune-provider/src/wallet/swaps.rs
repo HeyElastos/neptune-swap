@@ -211,10 +211,14 @@ impl Wallets {
     }
 
     /// Where a lock is on chain: this wallet's own (by id) or a note from a
-    /// counterparty, searched from `from_height`.
+    /// counterparty, searched from `from_height`. `locked: false`: this wallet made no lock
+    /// with that id, so none went out (`htlc_lock` keeps a lock before sending it).
     pub fn htlc_status(&self, network_id: &str, swap_id: Option<&str>, note: Option<HtlcNote>, from_height: u64, node: &dyn Node) -> Result<Value> {
         let tip = rpc::parse_height(&node.call(rpc::height_request())?)?;
         let located = match (swap_id, note) {
+            (Some(id), _) if !self.book(network_id)?.locks.iter().any(|l| l.id == id) => {
+                return Ok(json!({ "found": false, "locked": false, "tip": tip }))
+            }
             (Some(id), _) => self.locate_own(network_id, id, node)?,
             (None, Some(note)) => {
                 note.check()?;

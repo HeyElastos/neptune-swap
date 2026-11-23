@@ -348,6 +348,13 @@ impl Deal {
             Stage::AwaitClaim => self.await_claim(c)?,
             Stage::AwaitEvm | Stage::ClaimEvm if now * 1000 >= self.neptune_refund_ms && !self.claim_sent => {
                 let swap_id = self.swap_id.clone().context("no NPT lock")?;
+                // No lock in the provider's book by the refund time: none went out, and none
+                // can now (`htlc_lock` takes no refund time in the past).
+                if c.neptune.call("htlc_status", json!({ "swap_id": swap_id }))?["locked"] == false {
+                    self.stage = Stage::Failed;
+                    self.line = "our NPT lock never went out; nothing to refund".into();
+                    return Ok(None);
+                }
                 c.neptune.call("htlc_refund", json!({ "swap_id": swap_id, "fee": NPT_FEE }))?;
                 self.submitted = Some((now, false));
                 self.stage = Stage::Settling;
@@ -513,8 +520,7 @@ mod tests {
         assert_eq!(matches(&offer, &swapped), None, "the other direction");
     }
 
-    #[test]
-    fn a_deal_comes_back_whole_from_its_journal_record() {
+    fn a_deal() -> Deal {
         let signer = intents_protocol::DidKey::new(SigningKey::from_bytes(&[7; 32]).verifying_key());
         let usdc = Asset { chain: Chain::Base, symbol: "USDC".into() };
         let intent = Intent {
@@ -537,7 +543,7 @@ mod tests {
             refund_key: "44".repeat(20),
             expires_at: 2_000_000_000,
         };
-        let deal = Deal {
+        Deal {
             stage: Stage::AwaitClaim,
             user: signer.to_string(),
             intent: Decoded { body: intent, signer, digest: "55".repeat(32) },
@@ -555,11 +561,63 @@ mod tests {
             submitted: Some((5, true)),
             claim_sent: false,
             line: "EVM locked".into(),
-        };
+        }
+    }
+
+    #[test]
+    fn a_deal_comes_back_whole_from_its_journal_record() {
+        let deal = a_deal();
+        let signer = deal.intent.signer;
         let record = serde_json::to_value(&deal).unwrap();
         assert_eq!(record["step"], "await_claim", "the journal prunes by step");
         assert_eq!(record["intent"]["signer"], signer.to_string());
         let back: Deal = serde_json::from_value(record.clone()).unwrap();
         assert_eq!(serde_json::to_value(&back).unwrap(), record);
+    }
+
+    /// A provider that answers `htlc_status` from `status` and logs every op it is asked.
+    fn fake_provider(name: &str, status: &str) -> Provider {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("solver-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("provider");
+        let ok = r#"{"status":"ok","data":{}}"#;
+        std::fs::write(&script, format!("#!/bin/sh\nread l\necho \"$l\" >> \"$NEPTUNE_PROVIDER_DATA/ops\"\ncase \"$l\" in *htlc_status*) echo '{{\"status\":\"ok\",\"data\":{status}}}';; *) echo '{ok}';; esac\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        Provider { binary: script, data: dir, network: "neptune-regtest".into(), config: String::new() }
+    }
+
+    #[test]
+    fn a_lock_that_never_went_out_closes_the_deal_and_one_that_did_is_refunded() {
+        let evm = Node::local("http://127.0.0.1:1").unwrap();
+        let wallet = Wallet::from_hex(&"11".repeat(32)).unwrap();
+        let due = |deal: &mut Deal| {
+            std::mem::swap(&mut deal.intent.body.give, &mut deal.intent.body.want);
+            deal.stage = Stage::AwaitEvm;
+            deal.swap_id = Some("aa".repeat(8));
+            deal.neptune_refund_ms = 1_000;
+        };
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let never = fake_provider("never", r#"{"found":false,"locked":false,"tip":5}"#);
+        let mut deal = a_deal();
+        due(&mut deal);
+        assert!(deal.npt_exposure() > 0);
+        let c = Chains { neptune: &never, evm: &evm, wallet: &wallet };
+        deal.poll(&key, Net::Test, &c).unwrap();
+        deal.poll(&key, Net::Test, &c).unwrap();
+        assert_eq!(deal.stage, Stage::Failed, "closed: the daemon frees its slot");
+        assert_eq!(deal.npt_exposure(), 0);
+        let ops = std::fs::read_to_string(never.data.join("ops")).unwrap();
+        assert_eq!(ops.lines().count(), 1, "asked once, never refunded: {ops}");
+
+        let sent = fake_provider("sent", r#"{"found":true,"height":3,"aocl_index":0,"depth":3,"tip":5}"#);
+        let mut deal = a_deal();
+        due(&mut deal);
+        deal.poll(&key, Net::Test, &Chains { neptune: &sent, evm: &evm, wallet: &wallet }).unwrap();
+        assert_eq!(deal.stage, Stage::Settling);
+        assert!(std::fs::read_to_string(sent.data.join("ops")).unwrap().contains("htlc_refund"));
+        for p in [never, sent] {
+            std::fs::remove_dir_all(p.data).unwrap();
+        }
     }
 }

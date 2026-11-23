@@ -577,6 +577,8 @@ mod tests {
         let unknown = wallets.htlc_lock("neptune-main", Network::Main, "1", "0.05", claim_lock, 3_000, Some("nope"), 2_000, &node, Proving::Background);
         assert!(unknown.unwrap_err().to_string().contains("no such prepared swap"));
         assert!(wallets.htlc_status("neptune-main", None, None, 0, &node).is_err());
+        let status = wallets.htlc_status("neptune-main", later["swap_id"].as_str(), None, 0, &node).unwrap();
+        assert_eq!(status["locked"], false, "prepared, never locked");
         fs::remove_dir_all(root).unwrap();
     }
 
