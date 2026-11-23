@@ -19,7 +19,7 @@ Rules the gateway enforces:
 
 The swap messages (intent, quote, accept, npt_locked, evm_locked) are the intents-protocol
 envelopes sealed with `intents_protocol::seal` to the recipient's did:key, exactly as
-`crates/solver/src/bin/swap-e2e.rs` sends them. The solver (`crates/solver/src/carrier.rs`, topic `neptune-swap-dev-<hex>` in swap-e2e) uses
+`crates/solver/src/bin/solver-daemon.rs` sends them. The solver (`crates/solver/src/carrier.rs`) uses
 sender_id "solver" on the dev Home's managed runtime (`home-runtime-coords.json`). Note: the gateway
 process runs its own carrier node, so the capsule (gateway) and the solver (managed runtime) may be two
 nodes; whether they find each other without tickets is still to be checked.

@@ -34,11 +34,14 @@ a lock only there (docs/swap-safety.md, section 4).
 
 ## 3. A whole swap without elastOS
 
-Two provider wallets swap NPT for ETH end to end, with the provider binary driven over stdio
-exactly as the Runtime drives it:
+Two provider wallets swap NPT and ETH end to end, both ways: the app's own swap engine as
+the user against the solver's `Deal` (`crates/intents-ui/tests/swap_e2e.rs`), with the
+provider binary driven over stdio exactly as the Runtime drives it:
 
 ```bash
-scripts/swap-e2e.sh /tmp/npt-user /tmp/npt-solver
+cargo build --release -p neptune-provider && scripts/deploy-htlc-local.sh
+NEPTUNE_SWAP_E2E=/tmp/npt-user,/tmp/npt-solver \
+  cargo test --release -p intents-ui --test swap_e2e -- --ignored --nocapture
 ```
 
 Both wallets need regtest NPT first. Create each and get an address from the provider:
@@ -55,8 +58,9 @@ done
 
 then send regtest NPT to each address from the regtest node's own wallet (`neptune-cli`,
 port 9798), which mines its own blocks.
-The run prints each step: intent, quote, accept, NPT lock (checked on the solver's own
-node), ETH lock, the user's claim (the secret goes public), the solver's NPT claim.
+Each run goes intent, quote, accept, NPT lock (checked on the receiver's own node), ETH
+lock, the claim on Base (the secret goes public), the NPT claim; in the NPT → ETH run the
+solver also restarts from its journal right after its ETH lock.
 
 ## 4. Inside elastOS
 
@@ -83,7 +87,7 @@ exist; with them it should need none (roadmap check P2-10).
 
 - Works: the Neptune light wallet on regtest (send, receive, history), offers on the carrier,
   USD reference prices (after the Home approval), the Wallet connection on Base, the swap
-  contract on anvil, the full swap in `swap-e2e`.
+  contract on anvil, the full swap both ways in `swap_e2e`.
 - In progress: the swap flow inside the app (the engine is in `crates/intents-ui/src/swap.rs`;
   the screen that drives it comes next) and a solver that answers the app over the carrier.
 - Open before any main net use: see `docs/swap-safety.md`.

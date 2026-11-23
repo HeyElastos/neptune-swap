@@ -1,6 +1,6 @@
 [package]
 name = "solver"
-description = "Neptune swaps: the solver and user roles over both legs (Neptune HTLC through neptune-provider, EVM HTLC through evm-signer)"
+description = "The Neptune swap solver over both legs (Neptune HTLC through neptune-provider, EVM HTLC through evm-signer)"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

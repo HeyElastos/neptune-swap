@@ -183,6 +183,13 @@ fn the_user_gives_npt_for_eth() -> Result<()> {
         Ok(evm_notice.take())
     })?;
     println!("solver: {}", deal.line);
+    // The solver restarts before keeping anything after its last record, made just before
+    // its Base lock went out: from the journal it finds that lock by its id and announces
+    // it again, never locking twice.
+    let digest = deal.intent_digest().to_string();
+    let mut deal = Deal::load(&w.solver_npt)?.into_iter().find(|d| d.intent_digest() == digest).context("the deal's record")?;
+    let again = wait("the resumed deal's Base lock", 60, || deal.poll(&w.solver_key, Net::Test, &w.chains()))?;
+    assert_eq!(again, evm_notice, "the same lock, announced again");
     swap.on_evm_locked(&w.to_user(&swap, &evm_notice)?, now()).map_err(anyhow::Error::msg)?;
 
     // The user reads the lock from the chain, waits for confirmations, then claims.
