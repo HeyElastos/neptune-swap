@@ -159,7 +159,7 @@ fn shot_and_quit(app: &AppWindow, path: String) {
 const WALLET_CHAIN: (&str, &str) = (evm_leg::BASE, "Base");
 
 /// What the form says about the side that is not NPT: its chain decides, not its symbol (ELA
-/// on ESC goes through Wallet; ELA on the main chain is still to come).
+/// on the main chain is still to come).
 fn show_other_leg(app: &AppWindow, account: Option<&evm_leg::Account>) {
     let def = |i: i32| intent::ASSETS.get(i as usize);
     let other = [def(app.get_give_index()), def(app.get_want_index())].into_iter().flatten().find(|a| a.symbol != "NPT");
@@ -177,7 +177,7 @@ fn show_other_leg(app: &AppWindow, account: Option<&evm_leg::Account>) {
             None => ("connect", format!("Connect elastOS Wallet for the {} side ({})", a.symbol, a.network)),
         },
         (Some(a), _) if a.symbol == "BTC" => ("info", "Bitcoin side: elastOS Wallet cannot send Bitcoin yet.".to_string()),
-        (Some(a), _) if a.symbol == "ELA" => ("info", "ELA on the Elastos main chain: coming, as a scriptless swap. ELA on ESC works now.".to_string()),
+        (Some(a), _) if a.symbol == "ELA" => ("info", "ELA on the Elastos main chain: coming, as a scriptless swap.".to_string()),
         _ => ("", String::new()),
     };
     if app.get_other_leg_state() != "asking" || state == "connected" {

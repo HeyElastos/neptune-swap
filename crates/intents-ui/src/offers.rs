@@ -222,7 +222,7 @@ pub struct SolverForm<'a> {
 pub fn offer_from(form: &SolverForm, id: String, now: u64) -> Result<Offer, String> {
     use intents_protocol::Message as _;
     let npt = def("NPT").ok_or("no NPT")?;
-    let other = def(form.other).filter(|d| d.chain.is_some()).ok_or("Pick ELA, ETH, USDC or BTC.")?;
+    let other = def(form.other).filter(|d| d.chain.is_some()).ok_or("Pick ETH, USDC or BTC.")?;
     let parse = |text: &str, d: &AssetDef, what: &str| {
         Amount::parse_decimal(text, d.decimals, d.unit).map_err(|_| format!("{what} is a number like 0.15 or 1000."))
     };
@@ -297,7 +297,7 @@ mod tests {
         let bad = SolverForm { min_npt: "20000", ..form(true) };
         assert_eq!(offer_from(&bad, "0".repeat(32), NOW).unwrap_err(), "The maximum is below the minimum.");
         let ela = SolverForm { other: "ELA", ..form(true) };
-        assert_eq!(offer_from(&ela, "0".repeat(32), NOW).unwrap().want.chain, intents_protocol::Chain::Esc, "ELA trades on ESC");
+        assert_eq!(offer_from(&ela, "0".repeat(32), NOW).unwrap_err(), "Pick ETH, USDC or BTC.", "ELA: main chain only, not yet");
         let unknown = SolverForm { other: "DOGE", ..form(true) };
         assert!(offer_from(&unknown, "0".repeat(32), NOW).is_err());
         let words = SolverForm { price: "cheap", ..form(true) };
@@ -319,7 +319,7 @@ mod tests {
     }
 
     fn usdc() -> Asset {
-        asset_at(3).unwrap()
+        asset_at(2).unwrap()
     }
 
     fn npt() -> Asset {

@@ -332,8 +332,7 @@ fn eth_on_base_is_its_own_asset() {
     assert_eq!(asset_row(Chain::Base, "USDC"), Some((1_000_000, Some("833589fcd6edb6e08f4c7c32d4f71b54bda02913"))));
     assert_ne!(asset_row(Chain::Base, "USDC"), asset_row(Chain::Ethereum, "USDC"));
     assert_eq!((Chain::Base.evm_chain_id(), Chain::Neptune.evm_chain_id()), (Some(8453), None));
-    let ela = Intent { want: Asset { chain: Chain::Esc, symbol: "ELA".into() }, ..intent() };
-    assert!(ela.validate(NOW).is_ok());
-    assert_eq!(asset_row(Chain::Esc, "ELA"), Some((10u128.pow(18), None)));
-    assert_eq!(Chain::Esc.evm_chain_id(), Some(20));
+    // ELA trades on the Elastos main chain only (a scriptless swap), never on an EVM chain.
+    assert!(ASSETS.iter().all(|(chain, symbol, ..)| *symbol != "ELA" || !chain.is_evm()));
+    assert!(serde_json::from_str::<Chain>("\"esc\"").is_err(), "Elastos ESC is not a chain of this protocol");
 }

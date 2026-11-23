@@ -142,7 +142,7 @@ First, tomorrow:
 5. **Main-net send by the user** (small amount, fee 0.1) with the light node's own proofs.
 
 Next to build: answering takers' sealed requests from the app (solver side), the capsule's EVM
-leg calls through the Wallet bridge (Base/ESC in the protocol, not Ethereum main net), proof of
+leg calls through the Wallet bridge (Base in the protocol, not Ethereum main net), proof of
 work or a stake for public offers, reputation and a signed solver list, an encrypted seed.
 
 ## Current state (2026-11-16)
@@ -508,7 +508,8 @@ refund before T refused → refund after T (giver 4.75 → 4.65). What this does
   bridge pays; ETH and Circle's USDC there are their own assets (`asset_row(chain, symbol)`),
   distinct from Ethereum main net's. Ethereum main net stays in the protocol for native
   solvers; the app offers Base only. ESC was tried and dropped (user 2026-11-17: ELA on the
-  main chain, not ESC).
+  main chain, not ESC); since 2026-11-23 the protocol has no `Chain::Esc` either, so no lock
+  can be made or accepted there.
 - **One contract address on every chain, fixed by its creation code.** `contracts/htlc-evm`
   builds without metadata (`foundry.toml`), so its creation and runtime code are
   reproducible (`NeptuneHtlc.init.hex`, `NeptuneHtlc.runtime.hex`; a test compares a fresh

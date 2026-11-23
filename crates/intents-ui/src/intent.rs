@@ -19,23 +19,21 @@ pub struct AssetDef {
 /// (1 ELA = 10^8 sela) is shown but not offered yet: the main chain has no HTLC program, so it
 /// joins through a scriptless swap, still being built. Never through a bridge. USDC and ETH
 /// are on Base, where elastOS Wallet pays.
-pub const ASSETS: [AssetDef; 6] = [
+pub const ASSETS: [AssetDef; 5] = [
     AssetDef { chain: Some(Chain::Neptune), symbol: "NPT", letter: "N", network: "Neptune", decimals: 30, unit: 4 },
-    AssetDef { chain: Some(Chain::Esc), symbol: "ELA", letter: "E", network: "Elastos ESC", decimals: 18, unit: 1 },
     AssetDef { chain: None, symbol: "ELA", letter: "E", network: "Elastos main chain · coming", decimals: 8, unit: 1 },
     AssetDef { chain: Some(Chain::Base), symbol: "USDC", letter: "U", network: "Base", decimals: 6, unit: 1 },
     AssetDef { chain: Some(Chain::Base), symbol: "ETH", letter: "Ξ", network: "Base", decimals: 18, unit: 1 },
     AssetDef { chain: Some(Chain::Bitcoin), symbol: "BTC", letter: "B", network: "Bitcoin", decimals: 8, unit: 1 },
 ];
 
-/// The form's row for an asset, by chain and symbol together: two rows may share a symbol
-/// (ELA on ESC and on the main chain) with different units.
+/// The form's row for an asset, by chain and symbol together.
 pub fn row_of(asset: &intents_protocol::Asset) -> Option<usize> {
     ASSETS.iter().position(|a| a.chain == Some(asset.chain) && a.symbol == asset.symbol)
 }
 
 /// The form opens on "USDC for NPT".
-pub const DEFAULT_GIVE: usize = 3;
+pub const DEFAULT_GIVE: usize = 2;
 pub const DEFAULT_WANT: usize = 0;
 
 /// How long solvers may answer, matching the form's segmented choice.
@@ -118,7 +116,7 @@ mod tests {
     #[test]
     fn main_chain_ela_is_shown_but_not_offered_yet() {
         assert_eq!(
-            build(&form(2, "12.5", 0, "3"), ID.into(), NOW).unwrap_err(),
+            build(&form(1, "12.5", 0, "3"), ID.into(), NOW).unwrap_err(),
             "ELA swaps on the main chain are coming: a scriptless swap, still being built."
         );
     }
@@ -126,7 +124,7 @@ mod tests {
     #[test]
     fn every_offered_asset_is_the_protocols_with_the_same_units() {
         let offered: Vec<_> = ASSETS.iter().filter(|a| a.chain.is_some()).collect();
-        assert_eq!(offered.len(), 5);
+        assert_eq!(offered.len(), 4);
         for asset in offered {
             let (_, _, per_coin, _) = intents_protocol::ASSETS
                 .iter()
@@ -147,8 +145,8 @@ mod tests {
 
     #[test]
     fn form_mistakes_read_as_sentences() {
-        const USDC: usize = 3;
-        const BTC: usize = 5;
+        const USDC: usize = 2;
+        const BTC: usize = 4;
         assert_eq!(build(&form(USDC, "", 0, "1"), ID.into(), NOW).unwrap_err(), "Enter both amounts.");
         assert_eq!(build(&form(USDC, "1.1234567", 0, "1"), ID.into(), NOW).unwrap_err(), "USDC has at most 6 decimals.");
         assert_eq!(build(&form(USDC, "abc", 0, "1"), ID.into(), NOW).unwrap_err(), "Amounts are numbers like 12 or 0.5.");

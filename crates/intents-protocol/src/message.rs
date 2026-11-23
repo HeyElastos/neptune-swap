@@ -19,9 +19,6 @@ pub enum Chain {
     Ethereum,
     /// Base (EVM, chain id 8453), where elastOS Wallet pays.
     Base,
-    /// Elastos Smart Chain (EVM, chain id 20), where ELA is the native coin and elastOS
-    /// Wallet pays too.
-    Esc,
 }
 
 impl Chain {
@@ -30,7 +27,6 @@ impl Chain {
         match self {
             Chain::Ethereum => Some(1),
             Chain::Base => Some(8453),
-            Chain::Esc => Some(20),
             Chain::Neptune | Chain::Bitcoin => None,
         }
     }
@@ -76,7 +72,7 @@ impl Chain {
         match self {
             Chain::Neptune => 80,
             Chain::Bitcoin => 66,
-            Chain::Ethereum | Chain::Base | Chain::Esc => 40,
+            Chain::Ethereum | Chain::Base => 40,
         }
     }
 }
@@ -88,13 +84,12 @@ impl Chain {
 /// swap. USDC is Circle's own on each chain, not a bridged copy. The Elastos main chain
 /// accepts only fixed signature programs (no hash lock, no refund path), so ELA joins
 /// through a scriptless swap (PLAN.md, "ELA main chain"), not an HTLC there.
-pub const ASSETS: [(Chain, &str, u128, Option<&str>); 7] = [
+pub const ASSETS: [(Chain, &str, u128, Option<&str>); 6] = [
     (Chain::Neptune, "NPT", 4 * 10u128.pow(30), None),
     (Chain::Ethereum, "ETH", 10u128.pow(18), None),
     (Chain::Ethereum, "USDC", 10u128.pow(6), Some("a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")),
     (Chain::Base, "ETH", 10u128.pow(18), None),
     (Chain::Base, "USDC", 10u128.pow(6), Some("833589fcd6edb6e08f4c7c32d4f71b54bda02913")),
-    (Chain::Esc, "ELA", 10u128.pow(18), None),
     (Chain::Bitcoin, "BTC", 10u128.pow(8), None),
 ];
 

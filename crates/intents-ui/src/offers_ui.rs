@@ -18,7 +18,7 @@ use crate::{runtime, spawn, AddressRow, AppWindow};
 /// `REPUBLISH_SECS`, so an offer ends soon after the page closes.
 const COPY_SECS: u64 = 20 * 60;
 const REPUBLISH_SECS: u32 = 10 * 60;
-const OTHERS: [&str; 4] = ["USDC", "ETH", "ELA", "BTC"];
+const OTHERS: [&str; 3] = ["USDC", "ETH", "BTC"];
 
 /// The most offers this Home publishes at once (every reader keeps 5 per solver).
 const MINE_MAX: usize = 5;
@@ -584,7 +584,7 @@ mod tests {
         let npt = &crate::intent::ASSETS[0];
         assert_eq!(super::to_text(4 * 10u128.pow(30) * 1500, npt), "1500");
         assert_eq!(super::to_text(2_666_666_666_666_666_666_666_666_666_666_666, npt), "666.666666666666666666666666666666");
-        let usdc = &crate::intent::ASSETS[3];
+        let usdc = &crate::intent::ASSETS[2];
         assert_eq!(super::to_text(225_000_000, usdc), "225");
         assert_eq!(super::to_text(1_500_001, usdc), "1.500001");
     }

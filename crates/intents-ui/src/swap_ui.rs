@@ -288,9 +288,9 @@ async fn run(weak: Weak<AppWindow>, state: Shared, network: String, token: Strin
         }
         let now = runtime::now_secs();
         // Each EVM chain's own clock, read once a pass: every deadline on that chain is
-        // checked against it (Base and ESC each have their own).
+        // checked against it.
         let mut clocks: Vec<(&'static str, Option<u64>)> = vec![];
-        for ns in [evm_leg::BASE, evm_leg::ESC] {
+        for ns in [evm_leg::BASE] {
             if swaps.iter().any(|s| s.open_ended() && namespace(s).ok() == Some(ns)) {
                 clocks.push((ns, evm_leg::chain_time(ns, &token).await.ok()));
             }
