@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use intents_protocol::NPT_SETTLED_DEPTH;
+use intents_protocol::{NPT_NEVER_LANDED_MS, NPT_SETTLED_DEPTH};
 use serde_json::{json, Value};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
@@ -630,7 +630,7 @@ async fn step(
             // A lock that never reached the chain: decided only when this Home's node has blocks
             // from well past the refund time (a node behind or syncing knows too little).
             let tip_at = spent["tip_at_ms"].as_u64().unwrap_or(0);
-            if spent["found"] == false && swap.neptune_refund_ms().is_some_and(|ms| tip_at > ms + 6 * 3_600_000) {
+            if spent["found"] == false && swap.neptune_refund_ms().is_some_and(|ms| tip_at > ms + NPT_NEVER_LANDED_MS) {
                 swap.finish("Your NPT lock never reached the chain; your NPT stayed in your wallet.");
                 return Ok(());
             }

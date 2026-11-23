@@ -20,7 +20,7 @@ use evm_htlc::{decode_lock, hex, parse_address, parse_hex, parse_word, Address, 
 use evm_signer::{Node, Wallet};
 use intents_protocol::{
     asset_row, decode, may_reveal, other_refund_at, Accept, Amount, Chain, Decoded, EvmLocked, Intent, Message, Net, NptLocked, Offer, Quote,
-    Signed, NEPTUNE_SETTLE_SECS, NPT_FEE, NPT_MIN_DEPTH, PROTOCOL_VERSION,
+    Signed, NEPTUNE_SETTLE_SECS, NPT_FEE, NPT_MIN_DEPTH, NPT_NEVER_LANDED_MS, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -350,9 +350,22 @@ impl Deal {
                 let swap_id = self.swap_id.clone().context("no NPT lock")?;
                 // No lock in the provider's book by the refund time: none went out, and none
                 // can now (`htlc_lock` takes no refund time in the past).
-                if c.neptune.call("htlc_status", json!({ "swap_id": swap_id }))?["locked"] == false {
+                let status = c.neptune.call("htlc_status", json!({ "swap_id": swap_id }))?;
+                if status["locked"] == false {
                     self.stage = Stage::Failed;
                     self.line = "our NPT lock never went out; nothing to refund".into();
+                    return Ok(None);
+                }
+                // Kept but not on chain: given up as the app does, once this node's chain is well
+                // past the refund time. The provider keeps the lock, so it can still be refunded.
+                if status["found"] == false {
+                    let tip_at = c.neptune.call("htlc_spent", json!({ "swap_id": swap_id }))?["tip_at_ms"].as_u64().unwrap_or(0);
+                    if tip_at > self.neptune_refund_ms + NPT_NEVER_LANDED_MS {
+                        self.stage = Stage::Failed;
+                        self.line = "our NPT lock never reached the chain; nothing to refund".into();
+                    } else {
+                        self.line = "our NPT lock is not on chain; waiting before refunding".into();
+                    }
                     return Ok(None);
                 }
                 c.neptune.call("htlc_refund", json!({ "swap_id": swap_id, "fee": NPT_FEE }))?;
@@ -575,14 +588,14 @@ mod tests {
         assert_eq!(serde_json::to_value(&back).unwrap(), record);
     }
 
-    /// A provider that answers `htlc_status` from `status` and logs every op it is asked.
-    fn fake_provider(name: &str, status: &str) -> Provider {
+    /// A provider that answers `htlc_status` and `htlc_spent` as given and logs every op it is asked.
+    fn fake_provider(name: &str, status: &str, spent: &str) -> Provider {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("solver-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("provider");
         let ok = r#"{"status":"ok","data":{}}"#;
-        std::fs::write(&script, format!("#!/bin/sh\nread l\necho \"$l\" >> \"$NEPTUNE_PROVIDER_DATA/ops\"\ncase \"$l\" in *htlc_status*) echo '{{\"status\":\"ok\",\"data\":{status}}}';; *) echo '{ok}';; esac\n")).unwrap();
+        std::fs::write(&script, format!("#!/bin/sh\nread l\necho \"$l\" >> \"$NEPTUNE_PROVIDER_DATA/ops\"\ncase \"$l\" in *htlc_status*) echo '{{\"status\":\"ok\",\"data\":{status}}}';; *htlc_spent*) echo '{{\"status\":\"ok\",\"data\":{spent}}}';; *) echo '{ok}';; esac\n")).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         Provider { binary: script, data: dir, network: "neptune-regtest".into(), config: String::new() }
     }
@@ -598,7 +611,7 @@ mod tests {
             deal.neptune_refund_ms = 1_000;
         };
         let key = SigningKey::from_bytes(&[7; 32]);
-        let never = fake_provider("never", r#"{"found":false,"locked":false,"tip":5}"#);
+        let never = fake_provider("never", r#"{"found":false,"locked":false,"tip":5}"#, "{}");
         let mut deal = a_deal();
         due(&mut deal);
         assert!(deal.npt_exposure() > 0);
@@ -610,7 +623,7 @@ mod tests {
         let ops = std::fs::read_to_string(never.data.join("ops")).unwrap();
         assert_eq!(ops.lines().count(), 1, "asked once, never refunded: {ops}");
 
-        let sent = fake_provider("sent", r#"{"found":true,"height":3,"aocl_index":0,"depth":3,"tip":5}"#);
+        let sent = fake_provider("sent", r#"{"found":true,"height":3,"aocl_index":0,"depth":3,"tip":5}"#, "{}");
         let mut deal = a_deal();
         due(&mut deal);
         deal.poll(&key, Net::Test, &Chains { neptune: &sent, evm: &evm, wallet: &wallet }).unwrap();
@@ -618,6 +631,25 @@ mod tests {
         assert!(std::fs::read_to_string(sent.data.join("ops")).unwrap().contains("htlc_refund"));
         for p in [never, sent] {
             std::fs::remove_dir_all(p.data).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_kept_lock_never_on_chain_closes_the_deal_only_well_past_its_refund_time() {
+        let evm = Node::local("http://127.0.0.1:1").unwrap();
+        let wallet = Wallet::from_hex(&"11".repeat(32)).unwrap();
+        let key = SigningKey::from_bytes(&[7; 32]);
+        for (name, past, stage) in [("early", 0, Stage::AwaitEvm), ("late", 1, Stage::Failed)] {
+            let tip_at_ms = 1_000 + NPT_NEVER_LANDED_MS + past;
+            let spent = format!(r#"{{"found":false,"spent":false,"tip":5,"tip_at_ms":{tip_at_ms}}}"#);
+            let provider = fake_provider(name, r#"{"found":false,"tip":5}"#, &spent);
+            let mut deal = a_deal();
+            std::mem::swap(&mut deal.intent.body.give, &mut deal.intent.body.want);
+            (deal.stage, deal.swap_id, deal.neptune_refund_ms) = (Stage::AwaitEvm, Some("aa".repeat(8)), 1_000);
+            deal.poll(&key, Net::Test, &Chains { neptune: &provider, evm: &evm, wallet: &wallet }).unwrap();
+            assert_eq!(deal.stage, stage, "{name}: {}", deal.line);
+            assert!(!std::fs::read_to_string(provider.data.join("ops")).unwrap().contains("htlc_refund"), "{name}: no refund");
+            std::fs::remove_dir_all(provider.data).unwrap();
         }
     }
 }

@@ -79,6 +79,9 @@ pub const NPT_MIN_DEPTH: u64 = 6;
 pub const NPT_FEE: &str = "0.05";
 /// Neptune blocks under a claim or refund before it counts as done.
 pub const NPT_SETTLED_DEPTH: u64 = 3;
+/// A party's own NPT lock that its node never saw on chain counts as never landed once that
+/// node has blocks this far past the lock's refund time (ms); a node behind knows too little.
+pub const NPT_NEVER_LANDED_MS: u64 = 6 * 3_600_000;
 
 /// No HTLC in a quote may lock funds longer than this.
 pub const MAX_LOCK_SECS: u64 = 48 * 3600;
