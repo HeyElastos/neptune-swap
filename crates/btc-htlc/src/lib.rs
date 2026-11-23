@@ -41,8 +41,6 @@ use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::transaction::Version;
 use bitcoin::{Address, Amount, Network, OutPoint, PublicKey, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 
-/// The smallest output a claim or refund may leave (P2WSH dust); below it nothing is sent.
-pub const DUST: Amount = Amount::from_sat(330);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Htlc {
@@ -108,9 +106,10 @@ pub fn hash_lock(secret: &[u8; 32]) -> [u8; 32] {
 }
 
 /// One input spending the lock at `outpoint` (worth `value`) to `to`, less `fee`. Refused when
-/// the fee would leave dust or take more than half the value: nothing goes to fees by accident.
+/// the fee would leave dust (for the kind of output `to` is) or take more than half the
+/// value: nothing goes to fees by accident, and nothing that would not relay is made.
 fn spend(outpoint: OutPoint, value: Amount, to: ScriptBuf, fee: Amount, lock_time: LockTime, sequence: Sequence) -> Result<Transaction, Error> {
-    let left = value.checked_sub(fee).filter(|left| *left >= DUST && fee <= value / 2).ok_or(Error::BadFee)?;
+    let left = value.checked_sub(fee).filter(|left| *left >= to.minimal_non_dust() && fee <= value / 2).ok_or(Error::BadFee)?;
     Ok(Transaction {
         version: Version::TWO,
         lock_time,
@@ -271,6 +270,11 @@ mod tests {
         let (htlc, rk, sk, out) = setup();
         assert_eq!(claim(&htlc, out, VALUE, to(), VALUE, &SECRET, &rk), Err(Error::BadFee));
         assert_eq!(claim(&htlc, out, VALUE, to(), VALUE - Amount::from_sat(100), &SECRET, &rk), Err(Error::BadFee), "dust left");
+        // Dust depends on the output: 500 sat left relays to P2WPKH (294), not to P2PKH (546).
+        let (value, fee) = (Amount::from_sat(1_000), Amount::from_sat(500));
+        let p2pkh = ScriptBuf::new_p2pkh(&key(9).1.pubkey_hash());
+        assert!(claim(&htlc, out, value, to(), fee, &SECRET, &rk).is_ok());
+        assert_eq!(claim(&htlc, out, value, p2pkh, fee, &SECRET, &rk), Err(Error::BadFee), "P2PKH dust left");
         assert_eq!(refund(&htlc, out, VALUE, to(), Amount::from_sat(60_000), &sk), Err(Error::BadFee), "more than half to fees");
     }
 
