@@ -6,7 +6,10 @@ out = "out"
 cache_path = "cache"
 libs = []
 solc_version = "0.8.28"
-evm_version = "cancun"
+# Shanghai, not Cancun: Cancun lets solc emit MCOPY, and an EVM chain without it (Elastos ESC
+# rejects 0x5e, checked 2026-11-23) would revert every claim and refund, locking funds for good.
+# Shanghai code runs on Base and Ethereum alike. evm-htlc's pin test refuses Cancun opcodes.
+evm_version = "shanghai"
 optimizer = true
 optimizer_runs = 1000
 # No metadata in the bytecode: the deployed code then depends only on the source and these
