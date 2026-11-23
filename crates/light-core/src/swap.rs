@@ -16,7 +16,7 @@ use neptune_consensus::transaction::lock_script::LockScriptAndWitness;
 use neptune_consensus::transaction::primitive_witness::PrimitiveWitness;
 use neptune_consensus::transaction::transaction_kernel::TransactionKernelField;
 use neptune_consensus::transaction::utxo::{Coin, Utxo};
-use neptune_mutator_set::addition_record::AdditionRecord;
+pub use neptune_mutator_set::addition_record::AdditionRecord;
 use neptune_mutator_set::commit;
 use neptune_mutator_set::mutator_set_accumulator::MutatorSetAccumulator;
 use neptune_mutator_set::removal_record::absolute_index_set::AbsoluteIndexSet;
@@ -109,9 +109,9 @@ pub fn locate(note: &HtlcNote, blocks: &[RpcWalletBlock]) -> Option<Located> {
 }
 
 /// The block among `blocks` that spends the note's coin (at `at`), if any: its height, and
-/// the spending transaction's timestamp (ms). A spend timed before the refund time can only
-/// be the claim.
-pub fn spent_in(note: &HtlcNote, at: Located, blocks: &[RpcWalletBlock]) -> Option<(u64, u64)> {
+/// whether that block also holds one of `ours`, the outputs of this wallet's own claims and
+/// refunds (a coin is spent once, so the block holds no other spend of it).
+pub fn spent_in(note: &HtlcNote, at: Located, blocks: &[RpcWalletBlock], ours: &[AdditionRecord]) -> Option<(u64, bool)> {
     let index_set = note.index_set(at.aocl_index);
     blocks.iter().find_map(|block| {
         let kernel: BlockKernel = block.kernel.clone().into();
@@ -119,7 +119,7 @@ pub fn spent_in(note: &HtlcNote, at: Located, blocks: &[RpcWalletBlock]) -> Opti
         tx.inputs
             .iter()
             .any(|rr| rr.absolute_indices == index_set)
-            .then(|| (kernel.header.height.into(), tx.timestamp.to_millis()))
+            .then(|| (kernel.header.height.into(), tx.outputs.iter().any(|o| ours.contains(o))))
     })
 }
 

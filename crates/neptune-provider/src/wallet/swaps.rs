@@ -11,7 +11,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use anyhow::{bail, ensure, Context, Result};
 use light_core::neptune_primitives::network::Network;
 use light_core::rpc;
-use light_core::swap::{hex, hex_bytes, locate, new_secret, spent_in, HtlcNote, HtlcSpend, Located};
+use light_core::swap::{hex, hex_bytes, locate, new_secret, spent_in, AdditionRecord, HtlcNote, HtlcSpend, Located};
 use light_core::LightWallet;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -50,6 +50,9 @@ struct Book {
     /// hash lock in its Accept, then locks.
     #[serde(default)]
     prepared: Vec<Prepared>,
+    /// The outputs of this wallet's claims and refunds, newest last: they mark a spend as its own.
+    #[serde(default)]
+    spends: Vec<AdditionRecord>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -64,6 +67,9 @@ struct Prepared {
 /// A prepared secret is dropped a day after it was made: the quote it answered is long gone
 /// by then, and a secret with no lock guards nothing (a late `htlc_lock` fails, locking nothing).
 const PREPARED_MS: u64 = 24 * 3600 * 1000;
+
+/// Spend outputs kept (each claim or refund, resubmitted ones too, adds one); the oldest go.
+const SPENDS_KEPT: usize = 1000;
 
 impl Wallets {
     fn book(&self, network_id: &str) -> Result<Book> {
@@ -299,6 +305,11 @@ impl Wallets {
             &node.call(rpc::restore_membership_proof_request(vec![LightWallet::htlc_index_set(note, at)]))?,
         )?;
         let witness = wallet.build_htlc_spend(note, at, spend, fee, snapshot, now_ms)?;
+        // Kept before anything is sent: by it `htlc_spent` knows the spend as this wallet's.
+        let mut book = self.book(network_id)?;
+        book.spends.extend(&witness.kernel.outputs);
+        book.spends.drain(..book.spends.len().saturating_sub(SPENDS_KEPT));
+        self.save_book(network_id, &book)?;
         match proving {
             Proving::Wait => {
                 submit_witness(witness, wallet.network(), node)?;
@@ -318,9 +329,9 @@ impl Wallets {
     /// Whether a lock (this wallet's own by `swap_id`, or a counterparty's `note`) has been
     /// spent on chain, and how deep that spend is.
     pub fn htlc_spent(&self, network_id: &str, swap_id: Option<&str>, note: Option<HtlcNote>, from_height: u64, node: &dyn Node) -> Result<Value> {
+        let book = self.book(network_id)?;
         let (note, from) = match (swap_id, note) {
             (Some(id), _) => {
-                let book = self.book(network_id)?;
                 let lock = book.locks.iter().find(|l| l.id == id).context("no such swap")?;
                 (lock.note.clone(), lock.sent_at_height)
             }
@@ -340,10 +351,11 @@ impl Wallets {
         let mut start = at.height;
         while start <= tip {
             let end = tip.min(start + BATCH - 1);
-            if let Some((height, at_ms)) = spent_in(&note, at, &blocks(node, start, end)?) {
-                // Before the refund time only the claim path can spend it.
-                let by_claim = at_ms < note.refund_after_ms;
-                return Ok(json!({ "found": true, "spent": true, "height": height, "depth": tip.saturating_sub(height) + 1, "spent_at_ms": at_ms, "by_claim": by_claim, "tip": tip }));
+            if let Some((height, ours)) = spent_in(&note, at, &blocks(node, start, end)?, &book.spends) {
+                // Only the receiver claims and only the giver refunds: a spend of ours is the
+                // refund of our own lock, or the claim of a counterparty's.
+                let by_claim = ours != swap_id.is_some();
+                return Ok(json!({ "found": true, "spent": true, "height": height, "depth": tip.saturating_sub(height) + 1, "by_claim": by_claim, "tip": tip }));
             }
             start = end + 1;
         }

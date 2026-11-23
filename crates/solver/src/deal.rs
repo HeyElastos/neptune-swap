@@ -408,7 +408,7 @@ impl Deal {
             self.stage = Stage::Done;
             self.line = match (claim, spent["by_claim"] == true) {
                 (true, true) => "NPT claimed (on chain)".into(),
-                (true, false) => "the NPT lock was spent after its refund time, not by our claim".into(),
+                (true, false) => "the NPT lock was refunded to the user, not claimed by us".into(),
                 (false, _) => "NPT refunded (on chain)".into(),
             };
         } else if now > at + 20 * 60 {

@@ -586,7 +586,7 @@ async fn step(
             if spent["spent"] == true {
                 let depth = spent["depth"].as_u64().unwrap_or(0);
                 if spent["by_claim"] != true {
-                    swap.finish("The NPT lock was spent after its refund time, not by your claim. Check your Neptune wallet.");
+                    swap.finish("The NPT lock was refunded to its giver, not claimed by you. Check your Neptune wallet.");
                 } else if depth >= NPT_SETTLED_DEPTH {
                     swap.finish(format!("Swap complete: {} is in your Neptune wallet.", swap.want_label()));
                 } else {

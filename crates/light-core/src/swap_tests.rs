@@ -5,6 +5,7 @@ use neptune_consensus::block::Block;
 use neptune_consensus::transaction::utxo::Utxo;
 use neptune_consensus::type_scripts::native_currency_amount::NativeCurrencyAmount;
 use neptune_mutator_set::mutator_set_accumulator::MutatorSetAccumulator;
+use neptune_mutator_set::removal_record::RemovalRecord;
 use neptune_primitives::network::Network;
 use neptune_rpc_api::model::block::body::RpcMutatorSetAccumulator;
 use neptune_rpc_api::model::wallet::block::RpcWalletBlock;
@@ -12,7 +13,7 @@ use neptune_rpc_api::model::wallet::mutator_set::RpcMsMembershipSnapshot;
 use neptune_wallet::mock_block::block_with_puts;
 use tasm_lib::prelude::{Digest, Tip5};
 
-use crate::swap::{hex, locate, new_secret, HtlcNote, HtlcSpend, Located};
+use crate::swap::{hex, locate, new_secret, spent_in, AdditionRecord, HtlcNote, HtlcSpend, Located};
 use crate::LightWallet;
 
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon \
@@ -116,4 +117,18 @@ fn a_refund_before_its_time_is_refused_before_anything_else() {
         .to_string();
     assert!(err.contains("membership proof"), "{err}");
     let _ = Tip5::hash(&note.utxo);
+}
+
+#[test]
+fn a_spend_is_ours_when_its_block_holds_our_output() {
+    let (giver, receiver) = (wallet(PHRASE), other());
+    let note = note(&giver, &receiver);
+    let at = Located { height: 1, aocl_index: 0 };
+    let spend = RemovalRecord { absolute_indices: LightWallet::htlc_index_set(&note, at), target_chunks: Default::default() };
+    let ours: AdditionRecord = rand::random();
+    let block = block_with_puts(Network::Main, &Block::genesis(Network::Main), vec![rand::random(), ours], vec![spend]);
+    let blocks = [RpcWalletBlock::from(&block)];
+    assert_eq!(spent_in(&note, at, &blocks, &[rand::random(), ours]), Some((1, true)));
+    assert_eq!(spent_in(&note, at, &blocks, &[rand::random()]), Some((1, false)), "spent by the other party");
+    assert_eq!(spent_in(&note, Located { aocl_index: 1, ..at }, &blocks, &[ours]), None, "another coin");
 }
